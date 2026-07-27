@@ -197,7 +197,7 @@ function Detail({ label, value, wide }) {
 }
 
 async function recognizeNotice(item, force = false) {
-  const cacheKey = `notice-fields:v4:${item.id}`;
+  const cacheKey = `notice-fields:v5:${item.id}`;
   if (!force) {
     try {
       const cached = JSON.parse(localStorage.getItem(cacheKey));
@@ -282,7 +282,42 @@ function extractFields(source) {
 function extractPurchaseContent(text) {
   const labeled = extractPurchaseParagraph(text, ["采购内容", "项目需求", "招标内容"]);
   if (labeled) return labeled;
+  const tableItem = extractTableProductQuantity(text);
+  if (tableItem) return tableItem;
   return "公告未明确列示";
+}
+
+function extractTableProductQuantity(text) {
+  const lines = String(text || "").split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const contentIndex = lines.findIndex((line) => /采购内容|项目需求|招标内容/.test(line));
+  const rowIndex = lines.findIndex((line, index) =>
+    index > contentIndex && index < contentIndex + 80 && /^(?:标包|采购包|包)\s*\d+$/.test(line)
+  );
+  if (rowIndex >= 0) {
+    const product = lines.slice(rowIndex + 1, rowIndex + 5)
+      .find((line) => line.length >= 2 && !/^(?:是|否|台|套|个|项|批|件|辆|组|\d+(?:\.\d+)?)$/.test(line));
+    const unitIndex = lines.findIndex((line, index) =>
+      index > rowIndex && index < rowIndex + 12 && /^(?:台|套|个|项|批|件|辆|组)$/.test(line)
+    );
+    if (product && unitIndex > rowIndex) {
+      const numbers = lines.slice(unitIndex + 1, unitIndex + 8)
+        .filter((line) => /^\d+(?:\.\d+)?$/.test(line));
+      const quantity = numbers.length >= 3 ? numbers[1] : numbers[0];
+      if (quantity) return `${product.slice(0, 80)}，数量${quantity}${lines[unitIndex]}`;
+    }
+  }
+
+  const compact = String(text || "").replace(/\s+/g, "");
+  const summary = compact.match(
+    /(?:包段)?产品名称产品单位需求数量(?:标包|采购包|包)\d+(.{2,80}?)(台|套|个|项|批|件|辆|组)(\d+(?:\.\d+)?)/
+  );
+  if (!summary) return "";
+  const product = summary[1]
+    .replace(/^(?:产品名称|产品或服务名称)/, "")
+    .replace(/[：:、，,。]+$/, "")
+    .slice(0, 80);
+  if (!product || !summary[3]) return "";
+  return `${product}，数量${summary[3]}${summary[2]}`;
 }
 
 function extractPurchaseParagraph(text, labels) {
@@ -293,6 +328,7 @@ function extractPurchaseParagraph(text, labels) {
       .replace(/^\s*[：:、.]?\s*/, "");
     const nextItem = tail.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\)|[一二三四五六七八九十]+[、.．])\s*/);
     const table = tail.search(/\n\s*(?:采购包|包段|产品或服务名称|产品或服务描述|需求描述|对应的集采目录|是否属于充分竞争|计量单位|预估不含税|预算不含税)/);
+    if (table >= 0 && table <= 15) continue;
     const stops = [nextItem, table].filter((position) => position > 15);
     const stop = stops.length ? Math.min(...stops) : -1;
     const value = singleRequirement(stop > 0 ? tail.slice(0, stop) : tail).slice(0, 400);
