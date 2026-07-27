@@ -27,7 +27,7 @@ async function getNotices(url) {
     const collected = [];
     let reachedStart = false;
     for (let current = 1; current <= 10 && !reachedStart; current++) {
-      const content = await fetchList(current);
+      const content = await fetchList(current, startDate, endDate);
       if (!content.length) break;
       for (const item of content) {
         const date = String(item.publishDate || "").slice(0, 10);
@@ -93,7 +93,7 @@ async function getDocument(url) {
   }
 }
 
-async function fetchList(current) {
+async function fetchList(current, startDate, endDate) {
   const response = await fetch(LIST_API, {
     method: "POST",
     headers: upstreamHeaders(),
@@ -104,6 +104,8 @@ async function fetchList(current) {
       publishOneTypes: ["PROCUREMENT"],
       purchaseType: "",
       companyType: "",
+      creationDateStart: startDate,
+      creationDateEnd: endDate,
       size: 100,
       current,
       sfactApplColumn5: "PC"
