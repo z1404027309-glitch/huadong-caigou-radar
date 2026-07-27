@@ -197,7 +197,7 @@ function Detail({ label, value, wide }) {
 }
 
 async function recognizeNotice(item, force = false) {
-  const cacheKey = `notice-fields:v3:${item.id}`;
+  const cacheKey = `notice-fields:v4:${item.id}`;
   if (!force) {
     try {
       const cached = JSON.parse(localStorage.getItem(cacheKey));
@@ -291,8 +291,11 @@ function extractPurchaseParagraph(text, labels) {
     if (index < 0) continue;
     const tail = text.slice(index + label.length, index + label.length + 1400)
       .replace(/^\s*[：:、.]?\s*/, "");
-    const stop = tail.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\)|[一二三四五六七八九十]+[、.．])\s*/);
-    const value = singleRequirement(stop > 15 ? tail.slice(0, stop) : tail);
+    const nextItem = tail.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\)|[一二三四五六七八九十]+[、.．])\s*/);
+    const table = tail.search(/\n\s*(?:采购包|包段|产品或服务名称|产品或服务描述|需求描述|对应的集采目录|是否属于充分竞争|计量单位|预估不含税|预算不含税)/);
+    const stops = [nextItem, table].filter((position) => position > 15);
+    const stop = stops.length ? Math.min(...stops) : -1;
+    const value = singleRequirement(stop > 0 ? tail.slice(0, stop) : tail).slice(0, 400);
     if (value.length > 8) return value;
   }
   return "";
