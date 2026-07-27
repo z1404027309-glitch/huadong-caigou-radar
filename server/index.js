@@ -3,8 +3,14 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/api/notices") return getNotices(url);
     if (url.pathname === "/api/document") return getDocument(url);
-    if (url.pathname === "/") url.pathname = "/index.html";
-    return env.ASSETS.fetch(new Request(url, request));
+    if (url.pathname.includes("ort-wasm-simd-threaded.jsep") && url.pathname.endsWith(".wasm")) {
+      const asset = await env.ASSETS.fetch(request);
+      const headers = new Headers(asset.headers);
+      headers.set("content-encoding", "gzip");
+      headers.set("content-type", "application/wasm");
+      return new Response(asset.body, { status: asset.status, headers });
+    }
+    return env.ASSETS.fetch(request);
   }
 };
 
