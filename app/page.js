@@ -197,7 +197,7 @@ function Detail({ label, value, wide }) {
 }
 
 async function recognizeNotice(item, force = false) {
-  const cacheKey = `notice-fields:v5:${item.id}`;
+  const cacheKey = `notice-fields:v6:${item.id}`;
   if (!force) {
     try {
       const cached = JSON.parse(localStorage.getItem(cacheKey));
@@ -327,7 +327,9 @@ function extractPurchaseParagraph(text, labels) {
     const tail = text.slice(index + label.length, index + label.length + 1400)
       .replace(/^\s*[：:、.]?\s*/, "");
     const nextItem = tail.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\)|[一二三四五六七八九十]+[、.．])\s*/);
-    const table = tail.search(/\n\s*(?:采购包|包段|产品或服务名称|产品或服务描述|需求描述|对应的集采目录|是否属于充分竞争|计量单位|预估不含税|预算不含税)/);
+    const table = tail.search(
+      /\n\s*(?:采购包|包段|产品或服务名称|产品或服务描述|需求描述|对应的集采目录|是否属于充分竞争|计量单位|预估不含税|预算不含税|采\s*\n\s*购\s*\n\s*包|产\s*\n\s*品\s*(?:\n\s*或\s*\n\s*服\s*\n\s*务)?\s*\n\s*名\s*\n\s*称)/
+    );
     if (table >= 0 && table <= 15) continue;
     const stops = [nextItem, table].filter((position) => position > 15);
     const stop = stops.length ? Math.min(...stops) : -1;
