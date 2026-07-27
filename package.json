@@ -1,0 +1,18 @@
+{
+  "name": "huadong-caigou",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build && node -e \"const f=require('fs');f.cpSync('out','dist/assets',{recursive:true});f.cpSync('server','dist/server',{recursive:true});f.cpSync('.openai','dist/.openai',{recursive:true})\"",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@paddleocr/paddleocr-js": "^0.4.2",
+    "next": "15.5.21",
+    "pdfjs-dist": "^6.1.200",
+    "playwright": "^1.61.1",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  }
+}
