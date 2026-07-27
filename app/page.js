@@ -285,12 +285,19 @@ function extractPurchaseContent(text) {
     const index = text.indexOf(label);
     if (index >= 0) {
       const block = text.slice(index + label.length, index + label.length + 1400);
-      const stop = block.search(/\n\s*1\.\d+\s*(?:项目|采购包|本项目|有效|招标)|\n\s*(?:二|2)[、.．]/);
-      const value = clean(block.slice(0, stop > 50 ? stop : 700));
+      const stop = block.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\))\s*|\n\s*(?:二|2)[、.．]/);
+      const value = singleRequirement(block.slice(0, stop > 50 ? stop : 700));
       if (value.length > 12) return value;
     }
   }
-  return extractLabeled(text, ["采购内容", "项目需求", "招标内容"], 900);
+  return singleRequirement(extractLabeled(text, ["采购内容", "项目需求", "招标内容"], 900));
+}
+
+function singleRequirement(value) {
+  const normalized = normalize(value);
+  if (!normalized) return "";
+  const nextItem = normalized.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\))\s*/);
+  return clean(nextItem > 20 ? normalized.slice(0, nextItem) : normalized).slice(0, 700);
 }
 
 function extractBudget(text) {
