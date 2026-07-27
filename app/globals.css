@@ -44,6 +44,10 @@ aside { border-right:1px solid var(--line); padding-right:34px; }
 .list-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:22px; }
 .list-head h2 { margin:0 0 6px; font-size:24px; letter-spacing:-.03em; }
 .list-head p { margin:0; color:#98a2b3; font-size:13px; }
+.list-actions { display:flex; align-items:center; gap:9px; }
+.export { border:1px solid var(--green); background:var(--green); border-radius:7px; padding:9px 14px; color:#fff; cursor:pointer; }
+.export:hover { filter:brightness(.94); }
+.export:disabled { opacity:.5; cursor:not-allowed; }
 .refresh { border:1px solid #d9ded8; background:#fff; border-radius:7px; padding:9px 14px; color:#475467; cursor:pointer; }
 .refresh:hover { border-color:#97aaa2; color:var(--green); }
 .refresh:disabled { opacity:.6; }

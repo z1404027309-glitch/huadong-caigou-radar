@@ -18,6 +18,7 @@ export default function Home() {
   const [notices, setNotices] = useState([]);
   const [status, setStatus] = useState("loading");
   const [fetchedAt, setFetchedAt] = useState("");
+  const [exporting, setExporting] = useState(false);
   const requestId = useRef(0);
 
   async function refresh() {
@@ -71,6 +72,40 @@ export default function Home() {
     }
   }
 
+  async function exportExcel() {
+    if (!notices.length || exporting) return;
+    setExporting(true);
+    try {
+      const { default: writeXlsxFile } = await import("write-excel-file/browser");
+      const headers = ["公告日期", "省份", "项目名称", "采购内容", "采购预算金额", "采购文件售卖时间", "应答截止时间", "应答人资格", "业绩要求", "原公告链接"];
+      const value = (item, key) => item[key] || "公告未明确列示";
+      const rows = [
+        headers.map((title) => ({ value: title, fontWeight: "bold", backgroundColor: "#E4EBE5", align: "center" })),
+        ...notices.map((item) => [
+          { value: item.date || "" },
+          { value: item.region || "" },
+          { value: item.title || "" },
+          { value: value(item, "purchaseContent"), wrap: true },
+          { value: value(item, "budget") },
+          { value: value(item, "saleTime") },
+          { value: value(item, "deadline") },
+          { value: value(item, "qualification"), wrap: true },
+          { value: value(item, "performance"), wrap: true },
+          { value: item.url || "" }
+        ])
+      ];
+      const workbook = writeXlsxFile(rows, {
+        columns: [
+          { width: 14 }, { width: 10 }, { width: 42 }, { width: 48 }, { width: 18 },
+          { width: 25 }, { width: 22 }, { width: 48 }, { width: 48 }, { width: 45 }
+        ]
+      });
+      await workbook.toFile(`华东采购公告_${startDate}_${endDate}.xlsx`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   useEffect(() => { refresh(); }, []);
 
   const filtered = useMemo(() => notices.filter((item) => {
@@ -83,6 +118,9 @@ export default function Home() {
     name,
     name === "全部" ? notices.length : notices.filter((n) => n.region === name).length
   ])), [notices]);
+  const recognitionPending = notices.some((item) =>
+    item.extractionStatus?.includes("等待") || item.extractionStatus?.includes("正在")
+  );
 
   return (
     <main>
@@ -131,9 +169,15 @@ export default function Home() {
               <h2>{region === "全部" ? "全部采购公告" : `${region}采购公告`}</h2>
               <p>{status === "loading" ? "正在连接数据源…" : `找到 ${filtered.length} 条结果`}</p>
             </div>
-            <button className="refresh" onClick={refresh} disabled={status === "loading"}>
-              <span className={status === "loading" ? "spin" : ""}>↻</span> 刷新
-            </button>
+            <div className="list-actions">
+              <button className="export" onClick={exportExcel}
+                disabled={!notices.length || recognitionPending || exporting}>
+                {exporting ? "正在导出…" : recognitionPending ? "识别完成后导出" : "导出 Excel"}
+              </button>
+              <button className="refresh" onClick={refresh} disabled={status === "loading"}>
+                <span className={status === "loading" ? "spin" : ""}>↻</span> 刷新
+              </button>
+            </div>
           </div>
 
           {status === "loading" && <Loading />}
