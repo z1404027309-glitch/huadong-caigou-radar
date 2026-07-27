@@ -197,7 +197,7 @@ function Detail({ label, value, wide }) {
 }
 
 async function recognizeNotice(item, force = false) {
-  const cacheKey = `notice-fields:${item.id}`;
+  const cacheKey = `notice-fields:v2:${item.id}`;
   if (!force) {
     try {
       const cached = JSON.parse(localStorage.getItem(cacheKey));
@@ -280,6 +280,9 @@ function extractFields(source) {
 }
 
 function extractPurchaseContent(text) {
+  const labeled = extractPurchaseParagraph(text, ["采购内容", "项目需求", "招标内容"]);
+  if (labeled) return labeled;
+
   const tableLabels = ["产品或服务描述", "服务描述", "需求描述"];
   for (const label of tableLabels) {
     const index = text.indexOf(label);
@@ -290,7 +293,20 @@ function extractPurchaseContent(text) {
       if (value.length > 12) return value;
     }
   }
-  return singleRequirement(extractLabeled(text, ["采购内容", "项目需求", "招标内容"], 900));
+  return "公告未单独列示";
+}
+
+function extractPurchaseParagraph(text, labels) {
+  for (const label of labels) {
+    const index = text.indexOf(label);
+    if (index < 0) continue;
+    const tail = text.slice(index + label.length, index + label.length + 1400)
+      .replace(/^\s*[：:、.]?\s*/, "");
+    const stop = tail.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\)|[一二三四五六七八九十]+[、.．])\s*/);
+    const value = singleRequirement(stop > 15 ? tail.slice(0, stop) : tail);
+    if (value.length > 8) return value;
+  }
+  return "";
 }
 
 function singleRequirement(value) {
