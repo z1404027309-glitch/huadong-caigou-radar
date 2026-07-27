@@ -197,7 +197,7 @@ function Detail({ label, value, wide }) {
 }
 
 async function recognizeNotice(item, force = false) {
-  const cacheKey = `notice-fields:v2:${item.id}`;
+  const cacheKey = `notice-fields:v3:${item.id}`;
   if (!force) {
     try {
       const cached = JSON.parse(localStorage.getItem(cacheKey));
@@ -282,18 +282,7 @@ function extractFields(source) {
 function extractPurchaseContent(text) {
   const labeled = extractPurchaseParagraph(text, ["采购内容", "项目需求", "招标内容"]);
   if (labeled) return labeled;
-
-  const tableLabels = ["产品或服务描述", "服务描述", "需求描述"];
-  for (const label of tableLabels) {
-    const index = text.indexOf(label);
-    if (index >= 0) {
-      const block = text.slice(index + label.length, index + label.length + 1400);
-      const stop = block.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\))\s*|\n\s*(?:二|2)[、.．]/);
-      const value = singleRequirement(block.slice(0, stop > 50 ? stop : 700));
-      if (value.length > 12) return value;
-    }
-  }
-  return "公告未单独列示";
+  return "公告未明确列示";
 }
 
 function extractPurchaseParagraph(text, labels) {
@@ -317,10 +306,33 @@ function singleRequirement(value) {
 }
 
 function extractBudget(text) {
-  const explicit = extractLabeled(text, ["项目预算金额", "采购预算金额", "预算金额"], 240);
-  if (/\d/.test(explicit)) return explicit;
-  const ceiling = extractLabeled(text, ["最高投标限价", "最高限价"], 240);
-  return ceiling ? `公告未单列预算；${ceiling}` : "公告未明确列示";
+  const labels = ["项目预算金额", "采购预算金额", "预算总金额", "预算金额"];
+  for (const label of labels) {
+    const index = text.indexOf(label);
+    if (index < 0) continue;
+    const tail = text.slice(index + label.length, index + label.length + 260);
+    const stop = tail.search(/\n\s*(?:\d+\.\d+|（\d+）|\(\d+\)|[一二三四五六七八九十]+[、.．])\s*/);
+    const field = stop > 5 ? tail.slice(0, stop) : tail;
+    const amount = extractMoney(field);
+    if (amount) return amount;
+  }
+  return "公告未明确列示";
+}
+
+function extractMoney(value) {
+  const compact = String(value || "").replace(/\s+/g, "");
+  const untaxed = compact.match(/不含税[^0-9]{0,30}(?:[（(](万元|亿元|元)[）)])?[^0-9]{0,12}([0-9][\d,.]*)(?:[（(](万元|亿元|元)[）)]|(万元|亿元|元))?/);
+  if (untaxed) return formatMoney(untaxed[2], untaxed[3] || untaxed[4] || untaxed[1]);
+  const amount = compact.match(/([0-9][\d,.]*)(?:[（(](万元|亿元|元)[）)]|(万元|亿元|元))/);
+  return amount ? formatMoney(amount[1], amount[2] || amount[3]) : "";
+}
+
+function formatMoney(number, unit) {
+  if (!number || !unit) return "";
+  const normalized = number.includes(".")
+    ? number.replace(/0+$/, "").replace(/\.$/, "")
+    : number;
+  return `${normalized}${unit}`;
 }
 
 function extractDateRange(text) {
@@ -340,7 +352,7 @@ function extractRequirement(section, labels, first) {
   const number = "(?:（\\d+）|\\(\\d+\\)|\\d+(?:\\.\\d+)+|\\d+\\.)";
   const items = section.match(new RegExp(`(?:^|\\n)\\s*${number}[、.．]?\\s*.+?(?=\\n\\s*${number}[、.．]?\\s*|$)`, "gs")) || [];
   const found = items.find((item) => labels.some((label) => item.includes(label)));
-  return clean(found || (first ? items[0] : ""));
+  return clean(found || (first ? items[0] : "")).slice(0, 700);
 }
 
 function extractLabeled(text, labels, limit) {
