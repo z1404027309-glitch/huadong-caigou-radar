@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "huadong-caigou-radar",
+  "pages_build_output_dir": "./out",
+  "compatibility_date": "2026-08-08",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "southeast-operator-notice-rules",
+      "database_id": "d02b316f-ca63-4b1c-bc28-ceef7858b161"
+    }
+  ]
+}

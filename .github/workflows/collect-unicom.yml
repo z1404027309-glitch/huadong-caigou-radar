@@ -1,0 +1,40 @@
+name: Collect carrier procurement notices
+
+on:
+  schedule:
+    - cron: "15 0,4,8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect-unicom
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run collect:unicom
+      - run: npm run collect:tower
+      - run: npm run collect:telecom
+      - name: Commit updated archive
+        run: |
+          if git diff --quiet -- public/data/unicom-notices.json public/data/tower-notices.json public/data/telecom-notices.json; then
+            echo "No notice changes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data/unicom-notices.json public/data/tower-notices.json public/data/telecom-notices.json
+          git commit -m "Update carrier notice archives"
+          git push

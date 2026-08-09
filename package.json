@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build && node -e \"const f=require('fs');f.cpSync('out','dist/assets',{recursive:true});f.cpSync('server','dist/server',{recursive:true});f.cpSync('.openai','dist/.openai',{recursive:true})\"",
-    "start": "next start"
+    "start": "next start",
+    "collect:unicom": "node scripts/collect-unicom.mjs",
+    "collect:tower": "node scripts/collect-tower.mjs",
+    "collect:telecom": "node scripts/collect-telecom.mjs"
   },
   "dependencies": {
     "@paddleocr/paddleocr-js": "^0.4.2",
