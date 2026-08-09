@@ -210,8 +210,11 @@ const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/
 const REGIONS = ["浙江", "江西", "福建"];
 
 async function getNotices(url, env) {
+  const searchMode = url.searchParams.has("q") || url.searchParams.has("limit");
+  const query = String(url.searchParams.get("q") || "").trim();
+  const limit = Math.min(50, Math.max(1, Number.parseInt(url.searchParams.get("limit") || "10", 10) || 10));
   const endDate = validDate(url.searchParams.get("endDate")) || new Date().toISOString().slice(0, 10);
-  const startDate = validDate(url.searchParams.get("startDate")) || endDate;
+  const startDate = validDate(url.searchParams.get("startDate")) || (searchMode ? "2025-01-01" : endDate);
   if (startDate > endDate) return json({ notices: [], error: "invalid_date_range" }, 400);
 
   const notices = [];
@@ -262,6 +265,13 @@ async function getNotices(url, env) {
   }
 
   notices.sort((a, b) => `${b.date} ${b.createDate || ""}`.localeCompare(`${a.date} ${a.createDate || ""}`));
+  if (searchMode) {
+    const items = notices
+      .filter((item) => matchesNoticeQuery(item, query))
+      .slice(0, limit)
+      .map(toPublicNoticeItem);
+    return json({ success: true, items }, 200, "public, max-age=60");
+  }
   return json({
     notices,
     fetchedAt: new Date().toISOString(),
@@ -270,6 +280,52 @@ async function getNotices(url, env) {
     telecomFetchedAt: archives.telecom || "",
     errors
   }, notices.length || !errors.length ? 200 : 502);
+}
+
+function matchesNoticeQuery(item, query) {
+  if (!query) return true;
+  const province = String(item.region || item.province || "");
+  const operator = String(item.operator || "");
+  const shortOperator = operator.replace(/^中国/, "");
+  const haystack = normalizeSearchText([
+    item.title,
+    item.purchaseContent,
+    item.category,
+    item.noticeType,
+    item.projectNo,
+    item.budget,
+    province,
+    operator,
+    `${province}${shortOperator}`,
+    `${province}${operator}`
+  ].filter(Boolean).join(" "));
+  const terms = String(query).split(/[\s,，;；、]+/).map(normalizeSearchText).filter(Boolean);
+  return terms.every((term) => haystack.includes(term));
+}
+
+function normalizeSearchText(value) {
+  return String(value || "").toLowerCase().replace(/[\s\-_—（）()【】\[\]，,。.:：;；/\\]+/g, "");
+}
+
+function toPublicNoticeItem(item) {
+  return {
+    title: String(item.title || ""),
+    operator: String(item.operator || ""),
+    province: String(item.region || item.province || ""),
+    publishDate: firstDate(item.date || item.publishDate || item.createDate),
+    deadline: firstDate(item.deadline || item.responseDeadline || item.bidDeadline),
+    budget: String(item.budget || ""),
+    url: String(item.url || "")
+  };
+}
+
+function firstDate(value) {
+  const text = String(value || "");
+  const numeric = text.match(/(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  const chinese = text.match(/(20\d{2})年(\d{1,2})月(\d{1,2})日/);
+  const match = numeric || chinese;
+  if (!match) return "";
+  return `${match[1]}-${String(match[2]).padStart(2, "0")}-${String(match[3]).padStart(2, "0")}`;
 }
 
 function normalizeCategory(item) {
