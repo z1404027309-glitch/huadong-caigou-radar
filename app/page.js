@@ -52,6 +52,7 @@ export default function Home() {
   const [rulesStatus, setRulesStatus] = useState("loading");
   const [scoringCriteria, setScoringCriteria] = useState(defaultScoringCriteria);
   const [scoringStatus, setScoringStatus] = useState("loading");
+  const [expandedGroupIds, setExpandedGroupIds] = useState([]);
   const requestId = useRef(0);
 
   async function refresh() {
@@ -163,6 +164,11 @@ export default function Home() {
     void loadFocusRules();
     void loadScoringSettings();
   }, []);
+
+  useEffect(() => {
+    if (!focusGroups.length) return;
+    setExpandedGroupIds((current) => current.length ? current : [focusGroups[0].id]);
+  }, [focusGroups]);
 
   async function loadScoringSettings() {
     setScoringStatus("loading");
@@ -436,19 +442,43 @@ export default function Home() {
 
       {activeView === "settings" && (
         <section className="settings-page b2b-settings">
-          <div className="settings-head"><div><span className="section-kicker">公共关注与评分规则</span><h1>重点公告设置</h1><p>分类和评分规则保存在云端，保存后所有设备同步生效。</p></div><button className="secondary-action" onClick={() => setActiveView("dashboard")}>返回看板</button></div>
-          <div className="settings-add-row">
-            <section className="rule-builder add-group-card"><div><h2>添加大类</h2><p>建立业务方向，例如 AI与算力、工程建设。</p></div><div className="inline-add"><input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="输入新的大类名称" /><button onClick={addFocusGroup} disabled={rulesStatus === "saving"}>添加大类</button></div></section>
-            <section className="rule-builder add-rule-card"><div><h2>添加细分类</h2><p>关键词会同时匹配公告标题和采购内容。</p></div><div className="quick-rule-form">
-              <select aria-label="所属大类" value={ruleGroupId} onChange={(e) => setRuleGroupId(e.target.value)}>{focusGroups.map((group) => <option value={group.id} key={group.id}>{group.name}</option>)}</select>
-              <input aria-label="规则名称" value={ruleName} onChange={(e) => setRuleName(e.target.value)} placeholder="细分类名称，如 AI应用" />
-              <select aria-label="运营商" value={ruleOperator} onChange={(e) => setRuleOperator(e.target.value)}>{operators.map((name) => <option key={name}>{name}</option>)}</select>
-              <input aria-label="关键词" value={ruleKeywords} onChange={(e) => setRuleKeywords(e.target.value)} placeholder="关键词，多个用逗号分隔" />
-              <button onClick={() => addFocusRule()} disabled={rulesStatus === "saving" || !ruleGroupId}>添加细分类</button>
-            </div></section>
+          <div className="settings-head"><div><span className="section-kicker">公共关注与评分规则</span><h1>重点公告设置</h1><p>分类和评分规则保存在云端，保存后所有设备同步生效。</p></div></div>
+          <div className="focus-settings-grid">
+            <section className="rule-builder focus-builder-card">
+              <div className="focus-card-heading"><h2>添加关注规则</h2><p>先建立业务大类，再在大类下添加细分类。</p></div>
+              <div className="focus-form-section">
+                <h3>添加大类</h3>
+                <div className="inline-add"><input value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="输入新的大类名称" /><button onClick={addFocusGroup} disabled={rulesStatus === "saving"}>添加大类</button></div>
+              </div>
+              <div className="focus-form-section rule-section">
+                <h3>添加细分类</h3>
+                <div className="compact-rule-form">
+                  <label><span>所属大类</span><select value={ruleGroupId} onChange={(e) => setRuleGroupId(e.target.value)}>{focusGroups.map((group) => <option value={group.id} key={group.id}>{group.name}</option>)}</select></label>
+                  <label><span>运营商</span><select value={ruleOperator} onChange={(e) => setRuleOperator(e.target.value)}>{operators.map((name) => <option key={name}>{name}</option>)}</select></label>
+                  <label><span>细分类名称</span><input value={ruleName} onChange={(e) => setRuleName(e.target.value)} placeholder="如 AI应用" /></label>
+                  <label><span>关键词（多个用逗号分隔）</span><input value={ruleKeywords} onChange={(e) => setRuleKeywords(e.target.value)} placeholder="AI、人工智能、大模型" /></label>
+                  <button onClick={() => addFocusRule()} disabled={rulesStatus === "saving" || !ruleGroupId}>添加细分类</button>
+                </div>
+              </div>
+            </section>
+            <section className="rules-panel focus-architecture-card">
+              <div className="panel-head"><div><h2>当前分类架构</h2><p>{rulesStatus === "loading" ? "正在读取云端分类…" : rulesStatus === "error" ? "规则保存服务暂时不可用，请刷新重试" : `${focusGroups.length} 个大类 · ${focusRules.length} 个细分类`}</p></div><div className="architecture-actions">{rulesStatus === "error" && <button className="secondary-action" onClick={loadFocusRules}>重新连接</button>}<button className="collapse-all" onClick={() => setExpandedGroupIds([])}>全部收起</button></div></div>
+              {!focusGroups.length && <div className="rule-empty">暂无分类，请在左侧添加。</div>}
+              <div className="architecture-list">{focusGroups.map((group) => {
+                const groupRules = focusMatches.filter((rule) => rule.groupId === group.id);
+                const expanded = expandedGroupIds.includes(group.id);
+                const hitCount = groupRules.reduce((sum, rule) => sum + rule.matches.length, 0);
+                return <section className={`architecture-group ${expanded ? "expanded" : ""}`} key={group.id}>
+                  <div className="architecture-group-head">
+                    <button className="group-toggle" onClick={() => setExpandedGroupIds((current) => current.includes(group.id) ? current.filter((id) => id !== group.id) : [...current, group.id])}><span>{expanded ? "⌄" : "›"}</span><b>{group.name}</b><small>{groupRules.length} 个细分类 · 待命中 {hitCount} 条</small></button>
+                    <button className="delete-group" aria-label={`删除${group.name}`} onClick={() => removeFocusGroup(group.id)}>删除大类</button>
+                  </div>
+                  {expanded && <div className="rule-chip-list">{groupRules.map((rule) => <article className="rule-chip" key={rule.id}><button className="rule-chip-main" title={rule.keywords.join("、")}><b>{rule.name}</b><span>{rule.matches.length} 命中</span></button><button className="rule-chip-delete" aria-label={`删除${rule.name}`} onClick={() => removeFocusRule(rule.id)}>×</button></article>)}</div>}
+                </section>;
+              })}</div>
+            </section>
           </div>
-          <div className="settings-main-grid">
-            <section className="scoring-panel">
+          <section className="scoring-panel scoring-panel-full">
               <div className="panel-head"><div><h2>商机评分设置</h2><p>评分内容、匹配机制、参数和分值均可调整。</p></div><span className={`score-total ${scoringTotal === 100 ? "valid" : "invalid"}`}>启用项合计 {scoringTotal} 分</span></div>
               <div className="scoring-table-head"><span>评分内容</span><span>匹配机制</span><span>匹配参数</span><span>分值</span><span>启用</span><span>操作</span></div>
               <div className="scoring-table">{scoringCriteria.map((criterion) => {
@@ -465,16 +495,7 @@ export default function Home() {
               })}</div>
               <button className="add-score-item" onClick={addScoringCriterion}>＋ 添加评分项</button>
               <div className="scoring-actions"><button className="secondary-action" onClick={() => setScoringCriteria(defaultScoringCriteria.map((item) => ({ ...item })))}>恢复默认</button><span>{scoringStatus === "saved" ? "评分规则已保存并重新计算" : scoringStatus === "error" ? "云端保存暂不可用，请重试" : scoringTotal !== 100 ? "启用项总分必须等于100分" : "修改后请保存评分设置"}</span><button className="primary-action" onClick={saveScoringSettings} disabled={scoringStatus === "saving" || scoringTotal !== 100}>{scoringStatus === "saving" ? "正在保存…" : "保存评分设置"}</button></div>
-            </section>
-            <section className="rules-panel">
-              <div className="panel-head"><div><h2>当前分类架构</h2><p>{rulesStatus === "loading" ? "正在读取云端分类…" : rulesStatus === "error" ? "规则保存服务暂时不可用，请刷新重试" : `${focusGroups.length} 个大类 · ${focusRules.length} 个细分类`}</p></div>{rulesStatus === "error" && <button className="secondary-action" onClick={loadFocusRules}>重新连接</button>}</div>
-              {!focusGroups.length && <div className="rule-empty">暂无分类，请在上方添加。</div>}
-              <div className="group-list">{focusGroups.map((group) => {
-                const groupRules = focusMatches.filter((rule) => rule.groupId === group.id);
-                return <section className="group-card" key={group.id}><div className="group-head"><div><h3>{group.name}</h3><p>{groupRules.length} 个细分类 · 共命中 {groupRules.reduce((sum, rule) => sum + rule.matches.length, 0)} 条</p></div><button aria-label={`删除${group.name}`} onClick={() => removeFocusGroup(group.id)}>删除大类</button></div>{groupRules.map((rule) => <article className="rule-row" key={rule.id}><div><h3>{rule.name}<span>{rule.operator}</span></h3><p>{rule.keywords.join("、")}</p></div><div className="rule-count"><strong>{rule.matches.length}</strong><span>命中</span></div><button aria-label={`删除${rule.name}`} onClick={() => removeFocusRule(rule.id)}>×</button></article>)}</section>;
-              })}</div>
-            </section>
-          </div>
+          </section>
         </section>
       )}
 
