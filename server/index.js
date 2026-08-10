@@ -2,6 +2,9 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/notices") return getNotices(url, env);
+    if (url.pathname === "/api/refresh") return handleRefresh(request, env);
+    if (url.pathname === "/api/refresh-needed") return getRefreshNeeded(env);
+    if (url.pathname === "/api/archive-sync") return syncNoticeArchive(request, env);
     if (url.pathname === "/api/document") return getDocument(url);
     if (url.pathname === "/api/focus-rules") return handleFocusRules(request, env);
     if (url.pathname === "/api/scoring-settings") return handleScoringSettings(request, env);
@@ -205,9 +208,11 @@ async function ensureFocusSchema(db) {
   await db.batch(statements);
 }
 
-const LIST_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryList";
 const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryDetail";
-const REGIONS = ["浙江", "江西", "福建"];
+const ARCHIVE_SOURCES = ["mobile", "unicom", "tower", "telecom"];
+const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
+const OIDC_AUDIENCE = "huadong-caigou-radar";
+const REFRESH_REPOSITORY = "z1404027309-glitch/huadong-caigou-radar";
 
 async function getNotices(url, env) {
   const searchMode = url.searchParams.has("q") || url.searchParams.has("limit");
@@ -219,42 +224,17 @@ async function getNotices(url, env) {
 
   const notices = [];
   const errors = [];
-  try {
-    const collected = [];
-    let reachedStart = false;
-    const mobileCategories = [
-      { category: "采购公告", publishType: "PROCUREMENT", publishOneType: "PROCUREMENT" },
-      { category: "直接采购公告", publishType: "PROCUREMENT", publishOneType: "ONE_SOURCE_PROCUREMENT" },
-      { category: "采购意见征求公告", publishType: "PURCHASE_SERVICE", publishOneType: "PURCHASE_OPINION" }
-    ];
-    for (const config of mobileCategories) {
-     reachedStart = false;
-     for (let current = 1; current <= 10 && !reachedStart; current++) {
-      const content = await fetchList(current, startDate, endDate, config);
-      if (!content.length) break;
-      for (const item of content) {
-        const date = String(item.publishDate || "").slice(0, 10);
-        if (date && date < startDate) {
-          reachedStart = true;
-          continue;
-        }
-        if (date && date <= endDate) collected.push({ ...item, category: config.category });
-      }
-     }
-    }
-
-    notices.push(...collected.filter(isTargetNotice).map(toNotice));
-  } catch (error) {
-    errors.push(`mobile: ${String(error?.message || error)}`);
-  }
-
   const archives = {};
-  for (const source of ["unicom", "tower", "telecom"]) {
+  const storedArchives = await readStoredArchives(env);
+  for (const source of ARCHIVE_SOURCES) {
     try {
-      const assetUrl = new URL(`/data/${source}-notices.json`, url.origin);
-      const response = await env.ASSETS.fetch(new Request(assetUrl));
-      if (!response.ok) throw new Error(`archive ${response.status}`);
-      const archive = await response.json();
+      let archive = storedArchives[source];
+      if (!archive) {
+        const assetUrl = new URL(`/data/${source}-notices.json`, url.origin);
+        const response = await env.ASSETS.fetch(new Request(assetUrl));
+        if (!response.ok) throw new Error(`archive ${response.status}`);
+        archive = await response.json();
+      }
       archives[source] = archive.fetchedAt || "";
       notices.push(...(archive.notices || []).filter((item) =>
         item.date >= startDate && item.date <= endDate
@@ -275,11 +255,165 @@ async function getNotices(url, env) {
   return json({
     notices,
     fetchedAt: new Date().toISOString(),
+    mobileFetchedAt: archives.mobile || "",
     unicomFetchedAt: archives.unicom || "",
     towerFetchedAt: archives.tower || "",
     telecomFetchedAt: archives.telecom || "",
     errors
   }, notices.length || !errors.length ? 200 : 502);
+}
+
+async function handleRefresh(request, env) {
+  if (!env.DB) return json({ error: "refresh_database_unavailable" }, 503, "no-store");
+  await env.DB.prepare(`CREATE TABLE IF NOT EXISTS refresh_jobs (
+    id TEXT PRIMARY KEY,
+    requested_at TEXT NOT NULL,
+    status TEXT NOT NULL
+  )`).run();
+
+  if (request.method === "GET") {
+    const row = await env.DB.prepare("SELECT id, requested_at, status FROM refresh_jobs ORDER BY requested_at DESC LIMIT 1").first();
+    if (!row) return json({ status: "idle" }, 200, "no-store");
+    const archiveTimes = await readArchiveTimes(request, env);
+    const completed = Object.values(archiveTimes).length === 4
+      && Object.values(archiveTimes).every((value) => value && value > row.requested_at);
+    if (completed && row.status !== "completed") {
+      await env.DB.prepare("UPDATE refresh_jobs SET status = 'completed' WHERE id = ?").bind(row.id).run();
+    }
+    return json({
+      id: row.id,
+      status: completed ? "completed" : row.status,
+      requestedAt: row.requested_at,
+      archiveTimes
+    }, 200, "no-store");
+  }
+
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405, "no-store");
+  const latest = await env.DB.prepare("SELECT id, requested_at, status FROM refresh_jobs ORDER BY requested_at DESC LIMIT 1").first();
+  const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  if (latest?.requested_at > tenMinutesAgo && latest.status !== "completed") {
+    return json({ id: latest.id, status: latest.status, requestedAt: latest.requested_at, reused: true }, 202, "no-store");
+  }
+
+  const id = crypto.randomUUID();
+  const requestedAt = new Date().toISOString();
+  await env.DB.prepare("INSERT INTO refresh_jobs (id, requested_at, status) VALUES (?, ?, 'queued')")
+    .bind(id, requestedAt).run();
+  return json({ id, status: "queued", requestedAt }, 202, "no-store");
+}
+
+async function getRefreshNeeded(env) {
+  if (!env.DB) return json({ shouldRun: false }, 200, "no-store");
+  await ensureArchiveSchema(env.DB);
+  const row = await env.DB.prepare("SELECT id, requested_at FROM refresh_jobs WHERE status != 'completed' ORDER BY requested_at DESC LIMIT 1").first();
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  return json({
+    shouldRun: Boolean(row?.requested_at && row.requested_at > oneHourAgo),
+    id: row?.id || null,
+    requestedAt: row?.requested_at || null
+  }, 200, "no-store");
+}
+
+async function syncNoticeArchive(request, env) {
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405, "no-store");
+  if (!env.DB) return json({ error: "archive_database_unavailable" }, 503, "no-store");
+  const source = new URL(request.url).searchParams.get("source") || "";
+  if (!ARCHIVE_SOURCES.includes(source)) return json({ error: "invalid_source" }, 400, "no-store");
+  const token = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  const claims = await verifyGithubOidcToken(token).catch(() => null);
+  if (!claims) return json({ error: "unauthorized" }, 401, "no-store");
+
+  const archive = await request.json().catch(() => null);
+  if (!archive || !Array.isArray(archive.notices) || archive.notices.length > 10000) {
+    return json({ error: "invalid_archive" }, 400, "no-store");
+  }
+  const fetchedAt = String(archive.fetchedAt || new Date().toISOString());
+  await ensureArchiveSchema(env.DB);
+  await env.DB.prepare(`INSERT INTO notice_archives (source, fetched_at, payload, updated_at)
+    VALUES (?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET
+    fetched_at = excluded.fetched_at, payload = excluded.payload, updated_at = excluded.updated_at`)
+    .bind(source, fetchedAt, JSON.stringify({ ...archive, fetchedAt }), new Date().toISOString()).run();
+  await completeRefreshJobs(env.DB);
+  return json({ success: true, source, fetchedAt, count: archive.notices.length }, 200, "no-store");
+}
+
+async function ensureArchiveSchema(db) {
+  await db.batch([
+    db.prepare(`CREATE TABLE IF NOT EXISTS notice_archives (
+      source TEXT PRIMARY KEY,
+      fetched_at TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS refresh_jobs (
+      id TEXT PRIMARY KEY,
+      requested_at TEXT NOT NULL,
+      status TEXT NOT NULL
+    )`)
+  ]);
+}
+
+async function readStoredArchives(env) {
+  if (!env.DB) return {};
+  await ensureArchiveSchema(env.DB);
+  const result = await env.DB.prepare("SELECT source, payload FROM notice_archives").all();
+  const archives = {};
+  for (const row of result.results || []) {
+    try { archives[row.source] = JSON.parse(row.payload); } catch {}
+  }
+  return archives;
+}
+
+async function completeRefreshJobs(db) {
+  const job = await db.prepare("SELECT id, requested_at FROM refresh_jobs WHERE status != 'completed' ORDER BY requested_at DESC LIMIT 1").first();
+  if (!job) return;
+  const rows = await db.prepare("SELECT source, fetched_at FROM notice_archives").all();
+  const times = Object.fromEntries((rows.results || []).map((row) => [row.source, row.fetched_at]));
+  if (ARCHIVE_SOURCES.every((source) => times[source] && times[source] > job.requested_at)) {
+    await db.prepare("UPDATE refresh_jobs SET status = 'completed' WHERE id = ?").bind(job.id).run();
+  }
+}
+
+async function verifyGithubOidcToken(token) {
+  if (!token || token.split(".").length !== 3) return null;
+  const [headerPart, payloadPart, signaturePart] = token.split(".");
+  const header = JSON.parse(new TextDecoder().decode(base64UrlBytes(headerPart)));
+  const claims = JSON.parse(new TextDecoder().decode(base64UrlBytes(payloadPart)));
+  const now = Math.floor(Date.now() / 1000);
+  if (header.alg !== "RS256" || !header.kid || claims.iss !== OIDC_ISSUER || claims.aud !== OIDC_AUDIENCE) return null;
+  if (Number(claims.exp || 0) < now || Number(claims.nbf || 0) > now + 30) return null;
+  if (claims.repository !== REFRESH_REPOSITORY || claims.ref !== "refs/heads/main") return null;
+  if (!String(claims.workflow_ref || "").includes("/.github/workflows/collect-unicom.yml@refs/heads/main")) return null;
+  const config = await fetch(`${OIDC_ISSUER}/.well-known/openid-configuration`).then((response) => response.json());
+  const jwks = await fetch(config.jwks_uri).then((response) => response.json());
+  const jwk = (jwks.keys || []).find((key) => key.kid === header.kid);
+  if (!jwk) return null;
+  const key = await crypto.subtle.importKey("jwk", jwk, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+  const valid = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, base64UrlBytes(signaturePart), new TextEncoder().encode(`${headerPart}.${payloadPart}`));
+  return valid ? claims : null;
+}
+
+function base64UrlBytes(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  const binary = atob(normalized);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+async function readArchiveTimes(request, env) {
+  const stored = await readStoredArchives(env);
+  const result = Object.fromEntries(Object.entries(stored).map(([source, archive]) => [source, String(archive.fetchedAt || "")]));
+  if (Object.keys(result).length === ARCHIVE_SOURCES.length) return result;
+  const origin = new URL(request.url).origin;
+  await Promise.all(ARCHIVE_SOURCES.map(async (source) => {
+    if (result[source]) return;
+    try {
+      const response = await env.ASSETS.fetch(new Request(new URL(`/data/${source}-notices.json`, origin)));
+      if (!response.ok) return;
+      const archive = await response.json();
+      result[source] = String(archive.fetchedAt || "");
+    } catch {}
+  }));
+  return result;
 }
 
 function matchesNoticeQuery(item, query) {
@@ -383,60 +517,6 @@ async function getDocument(url) {
   } catch (error) {
     return new Response(String(error?.message || error), { status: 502 });
   }
-}
-
-async function fetchList(current, startDate, endDate, config) {
-  const response = await fetch(LIST_API, {
-    method: "POST",
-    headers: upstreamHeaders(),
-    body: JSON.stringify({
-      name: "",
-      publishType: config.publishType,
-      publishOneType: config.publishOneType,
-      publishOneTypes: [config.publishOneType],
-      purchaseType: "",
-      companyType: "",
-      creationDateStart: startDate,
-      creationDateEnd: endDate,
-      size: 100,
-      current,
-      sfactApplColumn5: "PC"
-    })
-  });
-  if (!response.ok) throw new Error(`list ${response.status}`);
-  const payload = await response.json();
-  return payload?.data?.content || payload?.data?.records || [];
-}
-
-function isTargetNotice(item) {
-  const text = `${item.name || ""} ${item.companyTypeName || ""}`;
-  const region = REGIONS.some((name) => text.includes(name));
-  return region && ["采购公告", "直接采购公告", "采购意见征求公告"].includes(item.category);
-}
-
-function toNotice(item) {
-  const regionText = `${item.name || ""} ${item.companyTypeName || ""}`;
-  const region = REGIONS.find((name) => regionText.includes(name));
-  const params = new URLSearchParams({
-    publishId: String(item.id || ""),
-    publishUuid: item.uuid || "",
-    publishType: item.publishType || "PROCUREMENT",
-    publishOneType: item.publishOneType || "PROCUREMENT"
-  });
-  return {
-    id: String(item.id || item.uuid),
-    publishId: String(item.id || ""),
-    publishUuid: item.uuid || "",
-    publishType: item.publishType || "PROCUREMENT",
-    publishOneType: item.publishOneType || "PROCUREMENT",
-    category: item.category || item.publishOneType_dictText || "采购公告",
-    title: item.name || "未命名采购公告",
-    operator: "中国移动",
-    sourceName: "中国移动采购与招标网",
-    region,
-    date: String(item.publishDate || "").split(" ")[0],
-    url: `https://b2b.10086.cn/#/noticeDetail?${params}`
-  };
 }
 
 function upstreamHeaders() {

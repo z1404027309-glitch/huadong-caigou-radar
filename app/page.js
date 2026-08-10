@@ -53,7 +53,10 @@ export default function Home() {
   const [scoringCriteria, setScoringCriteria] = useState(defaultScoringCriteria);
   const [scoringStatus, setScoringStatus] = useState("loading");
   const [expandedGroupIds, setExpandedGroupIds] = useState([]);
+  const [collectStatus, setCollectStatus] = useState("idle");
+  const [collectMessage, setCollectMessage] = useState("");
   const requestId = useRef(0);
+  const refreshPollId = useRef(null);
 
   async function refresh() {
     const currentRequest = ++requestId.current;
@@ -76,6 +79,41 @@ export default function Home() {
     } catch {
       if (currentRequest === requestId.current) setStatus("unavailable");
     }
+  }
+
+  async function triggerCollection() {
+    if (["requesting", "queued", "running"].includes(collectStatus)) return;
+    setCollectStatus("requesting");
+    setCollectMessage("正在提交四家运营商采集任务…");
+    try {
+      const response = await fetch("/api/refresh", { method: "POST", cache: "no-store" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || "后台采集服务暂时不可用");
+      setCollectStatus("queued");
+      setCollectMessage("后台正在重新采集，完成后将自动更新（通常需 3—10 分钟）");
+      scheduleRefreshPoll();
+    } catch (error) {
+      setCollectStatus("error");
+      setCollectMessage(String(error?.message || error));
+    }
+  }
+
+  function scheduleRefreshPoll() {
+    if (refreshPollId.current) clearTimeout(refreshPollId.current);
+    refreshPollId.current = setTimeout(async () => {
+      try {
+        const response = await fetch("/api/refresh", { cache: "no-store" });
+        const data = await response.json();
+        if (data.status === "completed") {
+          setCollectStatus("completed");
+          setCollectMessage("四家运营商数据已更新");
+          await refresh();
+          return;
+        }
+        setCollectStatus(data.status === "idle" ? "queued" : data.status);
+      } catch {}
+      scheduleRefreshPoll();
+    }, 15000);
   }
 
   async function enrichAll(list, currentRequest) {
@@ -163,6 +201,10 @@ export default function Home() {
     refresh();
     void loadFocusRules();
     void loadScoringSettings();
+  }, []);
+
+  useEffect(() => () => {
+    if (refreshPollId.current) clearTimeout(refreshPollId.current);
   }, []);
 
   useEffect(() => {
@@ -499,7 +541,7 @@ export default function Home() {
         </section>
       )}
 
-      {activeView === "list" && <section className="list-page"><div className="page-title"><div><h1>公告列表</h1><p>聚焦浙江、江西、福建，统一汇集移动、联通、电信、铁塔采购信息</p></div><div><button className="secondary-action" onClick={exportExcel}>导出 Excel</button><button className="secondary-action" onClick={refresh}>刷新</button></div></div><div className="filter-panel">
+      {activeView === "list" && <section className="list-page"><div className="page-title"><div><h1>公告列表</h1><p>聚焦浙江、江西、福建，统一汇集移动、联通、电信、铁塔采购信息</p></div><div className="page-actions">{collectMessage && <span className={`refresh-hint ${collectStatus}`}>{collectMessage}</span>}<button className="secondary-action" onClick={exportExcel}>导出 Excel</button><button className="secondary-action refresh-action" onClick={triggerCollection} disabled={["requesting", "queued", "running"].includes(collectStatus)}>{["requesting", "queued", "running"].includes(collectStatus) ? "采集中…" : "刷新数据"}</button></div></div><div className="filter-panel">
             <div className="control-title"><b>快速查询</b><span>按关键词、类别和发布日期筛选公告</span></div>
             <div className="search">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.35-5.65a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z"/></svg>
