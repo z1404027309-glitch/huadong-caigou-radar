@@ -44,24 +44,69 @@ jobs:
           node-version: 22
       - run: npm install --no-package-lock
       - run: npx playwright install --with-deps chromium
-      - run: npm run collect:mobile
-      - run: npm run collect:unicom
-      - run: npm run collect:tower
-      - run: npm run collect:telecom
+      - name: Collect China Mobile
+        id: mobile
+        continue-on-error: true
+        run: npm run collect:mobile
+      - name: Collect China Unicom
+        id: unicom
+        continue-on-error: true
+        run: npm run collect:unicom
+      - name: Collect China Tower
+        id: tower
+        continue-on-error: true
+        run: npm run collect:tower
+      - name: Collect China Telecom
+        id: telecom
+        continue-on-error: true
+        run: npm run collect:telecom
       - name: Request upload identity
         id: oidc
+        if: always()
         run: |
           TOKEN=$(curl --fail --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=huadong-caigou-radar" | jq -r .value)
           echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
-      - name: Sync archives to website
+      - name: Sync successful archives to website
+        if: always() && steps.oidc.outcome == 'success'
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+          MOBILE_STATUS: ${{ steps.mobile.outcome }}
+          UNICOM_STATUS: ${{ steps.unicom.outcome }}
+          TOWER_STATUS: ${{ steps.tower.outcome }}
+          TELECOM_STATUS: ${{ steps.telecom.outcome }}
         run: |
           for SOURCE in mobile unicom tower telecom; do
-            curl --fail --silent --show-error \
-              -X POST \
-              -H "Authorization: Bearer $OIDC_TOKEN" \
-              -H "Content-Type: application/json" \
-              --data-binary "@public/data/${SOURCE}-notices.json" \
-              "https://huadong-caigou-radar.pages.dev/api/archive-sync?source=${SOURCE}"
+            STATUS_VAR=$(echo "${SOURCE}_STATUS" | tr '[:lower:]' '[:upper:]')
+            STATUS=$(printenv "$STATUS_VAR")
+            if [ "$STATUS" = "success" ]; then
+              curl --fail --silent --show-error \
+                -X POST \
+                -H "Authorization: Bearer $OIDC_TOKEN" \
+                -H "Content-Type: application/json" \
+                --data-binary "@public/data/${SOURCE}-notices.json" \
+                "https://huadong-caigou-radar.pages.dev/api/archive-sync?source=${SOURCE}"
+            else
+              echo "Skipping ${SOURCE}: collector status is ${STATUS}"
+            fi
           done
+      - name: Finish refresh job
+        if: always() && steps.oidc.outcome == 'success'
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+          MOBILE_STATUS: ${{ steps.mobile.outcome }}
+          UNICOM_STATUS: ${{ steps.unicom.outcome }}
+          TOWER_STATUS: ${{ steps.tower.outcome }}
+          TELECOM_STATUS: ${{ steps.telecom.outcome }}
+        run: |
+          jq -n \
+            --arg mobile "$MOBILE_STATUS" \
+            --arg unicom "$UNICOM_STATUS" \
+            --arg tower "$TOWER_STATUS" \
+            --arg telecom "$TELECOM_STATUS" \
+            '{mobile:$mobile,unicom:$unicom,tower:$tower,telecom:$telecom}' | \
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @- \
+            "https://huadong-caigou-radar.pages.dev/api/refresh-finish"
