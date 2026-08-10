@@ -4,6 +4,7 @@ export default {
     if (url.pathname === "/api/notices") return getNotices(url, env);
     if (url.pathname === "/api/refresh") return handleRefresh(request, env);
     if (url.pathname === "/api/refresh-needed") return getRefreshNeeded(env);
+    if (url.pathname === "/api/refresh-finish") return finishRefresh(request, env);
     if (url.pathname === "/api/archive-sync") return syncNoticeArchive(request, env);
     if (url.pathname === "/api/document") return getDocument(url);
     if (url.pathname === "/api/focus-rules") return handleFocusRules(request, env);
@@ -305,13 +306,32 @@ async function handleRefresh(request, env) {
 async function getRefreshNeeded(env) {
   if (!env.DB) return json({ shouldRun: false }, 200, "no-store");
   await ensureArchiveSchema(env.DB);
-  const row = await env.DB.prepare("SELECT id, requested_at FROM refresh_jobs WHERE status != 'completed' ORDER BY requested_at DESC LIMIT 1").first();
+  const row = await env.DB.prepare("SELECT id, requested_at FROM refresh_jobs WHERE status = 'queued' ORDER BY requested_at DESC LIMIT 1").first();
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const shouldRun = Boolean(row?.requested_at && row.requested_at > oneHourAgo);
+  if (shouldRun) {
+    await env.DB.prepare("UPDATE refresh_jobs SET status = 'running' WHERE id = ? AND status = 'queued'").bind(row.id).run();
+  }
   return json({
-    shouldRun: Boolean(row?.requested_at && row.requested_at > oneHourAgo),
+    shouldRun,
     id: row?.id || null,
     requestedAt: row?.requested_at || null
   }, 200, "no-store");
+}
+
+async function finishRefresh(request, env) {
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405, "no-store");
+  if (!env.DB) return json({ error: "refresh_database_unavailable" }, 503, "no-store");
+  const token = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  const claims = await verifyGithubOidcToken(token).catch(() => null);
+  if (!claims) return json({ error: "unauthorized" }, 401, "no-store");
+  const results = await request.json().catch(() => ({}));
+  const failedSources = ARCHIVE_SOURCES.filter((source) => results[source] !== "success");
+  await ensureArchiveSchema(env.DB);
+  const job = await env.DB.prepare("SELECT id FROM refresh_jobs WHERE status IN ('queued', 'running') ORDER BY requested_at DESC LIMIT 1").first();
+  const status = "completed";
+  if (job) await env.DB.prepare("UPDATE refresh_jobs SET status = ? WHERE id = ?").bind(status, job.id).run();
+  return json({ success: true, status, failedSources }, 200, "no-store");
 }
 
 async function syncNoticeArchive(request, env) {
