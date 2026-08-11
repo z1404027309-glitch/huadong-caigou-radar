@@ -321,12 +321,13 @@ function parseNaturalNoticeQuery(query, focusRules) {
     ...SUPPORTED_OPERATORS.flatMap((value) => [value, value.replace("中国", "")]),
     ...SUPPORTED_NOTICE_CATEGORIES,
     ...focusRules.flatMap((rule) => [rule.name, rule.groupName, ...rule.keywords]),
-    "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "查询", "搜索", "查找", "查一下", "帮我查", "看看",
+    "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "发布", "查询", "搜索", "查找", "查一下", "帮我查", "看看",
     "今天", "今日", "本日", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周", "一个月内", "近一个月", "最近一个月"
   ].sort((a, b) => b.length - a.length);
   for (const value of removable) keywordText = keywordText.replaceAll(value, " ");
   keywordText = keywordText.replace(/近\s*\d+\s*(?:日|天)|最近\s*\d+\s*(?:日|天)/g, " ");
   keywordText = keywordText.replace(/20\d{2}(?:年|[-/.])\d{1,2}(?:月|[-/.])\d{1,2}日?/g, " ");
+  keywordText = keywordText.replace(/\d{1,2}月\d{1,2}日/g, " ");
   keywordText = keywordText.replace(/(?:近|最近)\s*\d+\s*个?月(?:内)?|\d+\s*个月(?:内)?/g, " ");
   keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
   const keywords = keywordText.split(/[\s,，;；、的]+/).map((value) => value.trim()).filter((value) => value.length >= 2);
@@ -345,12 +346,20 @@ function naturalDateRange(query, today) {
     };
   }
   if (explicitDates.length === 1) return { publishStart: explicitDates[0], publishEnd: explicitDates[0] };
+  const monthDay = query.match(/(?:^|\D)(\d{1,2})月(\d{1,2})日/);
+  if (monthDay) {
+    const inferred = normalizeExplicitDate(today.slice(0, 4), monthDay[1], monthDay[2]);
+    if (inferred) return { publishStart: inferred, publishEnd: inferred };
+  }
   if (/今天|今日|本日/.test(query)) return { publishStart: today, publishEnd: today };
   const recent = query.match(/(?:近|最近)\s*(\d+)\s*(?:日|天)/);
   if (recent) return { publishStart: offsetIsoDate(today, -(Math.min(365, Math.max(1, Number(recent[1]))) - 1)), publishEnd: today };
   if (/一周内|近一周|最近一周/.test(query)) return { publishStart: offsetIsoDate(today, -6), publishEnd: today };
-  const recentMonths = query.match(/(?:近|最近)?\s*(\d+)\s*个?月(?:内)?/);
-  if (recentMonths) return { publishStart: offsetIsoMonth(today, -Math.min(12, Math.max(1, Number(recentMonths[1])))), publishEnd: today };
+  const recentMonths = query.match(/(?:近|最近)\s*(\d+)\s*个?月(?:内)?|(\d+)\s*个月(?:内)?/);
+  if (recentMonths) {
+    const count = Number(recentMonths[1] || recentMonths[2]);
+    return { publishStart: offsetIsoMonth(today, -Math.min(12, Math.max(1, count))), publishEnd: today };
+  }
   if (/一个月内|近一个月|最近一个月/.test(query)) return { publishStart: offsetIsoMonth(today, -1), publishEnd: today };
   if (/本周|这周/.test(query)) {
     const date = new Date(`${today}T00:00:00Z`);

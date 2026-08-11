@@ -105,7 +105,19 @@ assert.equal(oneMonth.appliedFilters.publishStart, "2026-07-11");
 assert.equal(oneMonth.appliedFilters.publishEnd, "2026-08-11");
 assert.deepEqual(oneMonth.appliedFilters.keywords, []);
 
+const monthDayResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E6%B5%99%E6%B1%9F%E7%A7%BB%E5%8A%A88%E6%9C%887%E6%97%A5%E5%8F%91%E5%B8%83%E7%9A%84%E9%87%87%E8%B4%AD%E5%85%AC%E5%91%8A"), env);
+const monthDay = await monthDayResponse.json();
+assert.equal(monthDay.appliedFilters.publishStart, "2026-08-07");
+assert.equal(monthDay.appliedFilters.publishEnd, "2026-08-07");
+assert.deepEqual(monthDay.appliedFilters.keywords, []);
+
+const eightMonthsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA8%E4%B8%AA%E6%9C%88%E5%86%85AI%E5%85%AC%E5%91%8A"), env);
+const eightMonths = await eightMonthsResponse.json();
+assert.equal(eightMonths.appliedFilters.publishStart, "2025-12-11");
+assert.equal(eightMonths.appliedFilters.publishEnd, "2026-08-11");
+assert.deepEqual(eightMonths.appliedFilters.keywords, []);
+
 console.log(JSON.stringify({
   options: { provinces: options.provinces.length, operators: options.operators.length, focusGroups: options.focusGroups.length },
-  searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total, strictFocus: strictFocus.total, oneMonth: oneMonth.total }
+  searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total, strictFocus: strictFocus.total, oneMonth: oneMonth.total, monthDay: monthDay.total, eightMonths: eightMonths.total }
 }, null, 2));
