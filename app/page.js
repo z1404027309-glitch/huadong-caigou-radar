@@ -359,28 +359,28 @@ export default function Home() {
     const regionOk = region === "全部" || item.region === region;
     const operatorOk = operator === "全部运营商" || item.operator === operator;
     const categoryOk = category === "全部类别" || item.category === category;
-    const queryOk = !query.trim() || `${item.title} ${item.region} ${item.purchaseContent || ""}`.toLowerCase().includes(query.trim().toLowerCase());
+    const queryOk = matchesQuickQuery(item, query, focusRules);
     return regionOk && operatorOk && categoryOk && queryOk;
-  }), [notices, query, region, operator, category]);
+  }), [notices, query, region, operator, category, focusRules]);
 
   const counts = useMemo(() => {
     const scoped = notices.filter((item) => {
       const operatorOk = operator === "全部运营商" || item.operator === operator;
       const categoryOk = category === "全部类别" || item.category === category;
-      const queryOk = !query.trim() || `${item.title} ${item.region} ${item.purchaseContent || ""}`.toLowerCase().includes(query.trim().toLowerCase());
+      const queryOk = matchesQuickQuery(item, query, focusRules);
       return operatorOk && categoryOk && queryOk;
     });
     return Object.fromEntries(regions.map((name) => [name, name === "全部" ? scoped.length : scoped.filter((n) => n.region === name).length]));
-  }, [notices, operator, category, query]);
+  }, [notices, operator, category, query, focusRules]);
   const operatorCounts = useMemo(() => {
     const scoped = notices.filter((item) => {
       const regionOk = region === "全部" || item.region === region;
       const categoryOk = category === "全部类别" || item.category === category;
-      const queryOk = !query.trim() || `${item.title} ${item.region} ${item.purchaseContent || ""}`.toLowerCase().includes(query.trim().toLowerCase());
+      const queryOk = matchesQuickQuery(item, query, focusRules);
       return regionOk && categoryOk && queryOk;
     });
     return Object.fromEntries(operators.map((name) => [name, name === "全部运营商" ? scoped.length : scoped.filter((n) => n.operator === name).length]));
-  }, [notices, region, category, query]);
+  }, [notices, region, category, query, focusRules]);
   const recognitionPending = notices.some((item) =>
     item.extractionStatus?.includes("等待") || item.extractionStatus?.includes("正在")
   );
@@ -902,6 +902,20 @@ function extractPurchaseContent(text) {
   const tableItem = extractTableProductQuantity(text);
   if (tableItem) return tableItem;
   return "公告未明确列示";
+}
+
+function matchesQuickQuery(item, query, focusRules) {
+  const term = String(query || "").trim().toLowerCase();
+  if (!term) return true;
+  const haystack = `${item.title || ""} ${item.region || ""} ${item.operator || ""} ${item.purchaseContent || ""}`.toLowerCase();
+  if (haystack.includes(term)) return true;
+
+  return focusRules.some((rule) => {
+    const operatorOk = rule.operator === "全部运营商" || rule.operator === item.operator;
+    const aliases = [rule.name, ...(rule.keywords || [])].map((value) => String(value).toLowerCase());
+    const queryMatchesRule = aliases.some((alias) => alias.includes(term) || term.includes(alias));
+    return operatorOk && queryMatchesRule && aliases.some((alias) => haystack.includes(alias));
+  });
 }
 
 function looksLikeTableNoise(value) {
