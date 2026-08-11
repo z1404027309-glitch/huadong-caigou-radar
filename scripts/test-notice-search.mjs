@@ -81,7 +81,20 @@ assert.deepEqual(natural.appliedFilters.operators, []);
 assert(natural.appliedFilters.focusCategories.includes("AI应用"));
 assert.deepEqual(natural.appliedFilters.keywords, []);
 
+const explicitRangeResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=2026-08-04%20%E8%87%B3%202026-08-11%E7%A6%8F%E5%BB%BA%E6%89%80%E6%9C%89%E8%BF%90%E8%90%A5%E5%95%86%E7%9A%84AI%E5%85%AC%E5%91%8A&limit=10"), env);
+const explicitRange = await explicitRangeResponse.json();
+assert.equal(explicitRange.success, true);
+assert.equal(explicitRange.appliedFilters.publishStart, "2026-08-04");
+assert.equal(explicitRange.appliedFilters.publishEnd, "2026-08-11");
+assert.deepEqual(explicitRange.appliedFilters.keywords, []);
+
+const chineseDateResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=2026%E5%B9%B48%E6%9C%884%E6%97%A5%E7%A6%8F%E5%BB%BA%E7%A7%BB%E5%8A%A8%E5%85%AC%E5%91%8A"), env);
+const chineseDate = await chineseDateResponse.json();
+assert.equal(chineseDate.appliedFilters.publishStart, "2026-08-04");
+assert.equal(chineseDate.appliedFilters.publishEnd, "2026-08-04");
+assert.deepEqual(chineseDate.appliedFilters.keywords, []);
+
 console.log(JSON.stringify({
   options: { provinces: options.provinces.length, operators: options.operators.length, focusGroups: options.focusGroups.length },
-  searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total }
+  searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total }
 }, null, 2));

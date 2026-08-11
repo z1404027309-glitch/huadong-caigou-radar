@@ -326,12 +326,24 @@ function parseNaturalNoticeQuery(query, focusRules) {
   ].sort((a, b) => b.length - a.length);
   for (const value of removable) keywordText = keywordText.replaceAll(value, " ");
   keywordText = keywordText.replace(/近\s*\d+\s*(?:日|天)|最近\s*\d+\s*(?:日|天)/g, " ");
+  keywordText = keywordText.replace(/20\d{2}(?:年|[-/.])\d{1,2}(?:月|[-/.])\d{1,2}日?/g, " ");
+  keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
   const keywords = keywordText.split(/[\s,，;；、的]+/).map((value) => value.trim()).filter((value) => value.length >= 2);
 
   return { provinces, operators, noticeCategories, focusCategories, keywords, publishStart, publishEnd, limit: 10 };
 }
 
 function naturalDateRange(query, today) {
+  const explicitDates = [...query.matchAll(/(20\d{2})(?:年|[-/.])(\d{1,2})(?:月|[-/.])(\d{1,2})日?/g)]
+    .map((match) => normalizeExplicitDate(match[1], match[2], match[3]))
+    .filter(Boolean);
+  if (explicitDates.length >= 2) {
+    return {
+      publishStart: explicitDates[0] <= explicitDates[1] ? explicitDates[0] : explicitDates[1],
+      publishEnd: explicitDates[0] <= explicitDates[1] ? explicitDates[1] : explicitDates[0]
+    };
+  }
+  if (explicitDates.length === 1) return { publishStart: explicitDates[0], publishEnd: explicitDates[0] };
   if (/今天|今日|本日/.test(query)) return { publishStart: today, publishEnd: today };
   const recent = query.match(/(?:近|最近)\s*(\d+)\s*(?:日|天)/);
   if (recent) return { publishStart: offsetIsoDate(today, -(Math.min(365, Math.max(1, Number(recent[1]))) - 1)), publishEnd: today };
@@ -343,6 +355,12 @@ function naturalDateRange(query, today) {
   }
   if (/本月|这个月/.test(query)) return { publishStart: `${today.slice(0, 7)}-01`, publishEnd: today };
   return { publishStart: "2025-01-01", publishEnd: today };
+}
+
+function normalizeExplicitDate(year, month, day) {
+  const value = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value ? "" : value;
 }
 
 function offsetIsoDate(date, days) {
