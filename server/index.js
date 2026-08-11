@@ -322,11 +322,12 @@ function parseNaturalNoticeQuery(query, focusRules) {
     ...SUPPORTED_NOTICE_CATEGORIES,
     ...focusRules.flatMap((rule) => [rule.name, rule.groupName, ...rule.keywords]),
     "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "查询", "搜索", "查找", "查一下", "帮我查", "看看",
-    "今天", "今日", "本日", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周"
+    "今天", "今日", "本日", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周", "一个月内", "近一个月", "最近一个月"
   ].sort((a, b) => b.length - a.length);
   for (const value of removable) keywordText = keywordText.replaceAll(value, " ");
   keywordText = keywordText.replace(/近\s*\d+\s*(?:日|天)|最近\s*\d+\s*(?:日|天)/g, " ");
   keywordText = keywordText.replace(/20\d{2}(?:年|[-/.])\d{1,2}(?:月|[-/.])\d{1,2}日?/g, " ");
+  keywordText = keywordText.replace(/(?:近|最近)\s*\d+\s*个?月(?:内)?|\d+\s*个月(?:内)?/g, " ");
   keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
   const keywords = keywordText.split(/[\s,，;；、的]+/).map((value) => value.trim()).filter((value) => value.length >= 2);
 
@@ -348,6 +349,9 @@ function naturalDateRange(query, today) {
   const recent = query.match(/(?:近|最近)\s*(\d+)\s*(?:日|天)/);
   if (recent) return { publishStart: offsetIsoDate(today, -(Math.min(365, Math.max(1, Number(recent[1]))) - 1)), publishEnd: today };
   if (/一周内|近一周|最近一周/.test(query)) return { publishStart: offsetIsoDate(today, -6), publishEnd: today };
+  const recentMonths = query.match(/(?:近|最近)?\s*(\d+)\s*个?月(?:内)?/);
+  if (recentMonths) return { publishStart: offsetIsoMonth(today, -Math.min(12, Math.max(1, Number(recentMonths[1])))), publishEnd: today };
+  if (/一个月内|近一个月|最近一个月/.test(query)) return { publishStart: offsetIsoMonth(today, -1), publishEnd: today };
   if (/本周|这周/.test(query)) {
     const date = new Date(`${today}T00:00:00Z`);
     const day = date.getUTCDay() || 7;
@@ -367,6 +371,14 @@ function offsetIsoDate(date, days) {
   const value = new Date(`${date}T00:00:00Z`);
   value.setUTCDate(value.getUTCDate() + days);
   return value.toISOString().slice(0, 10);
+}
+
+function offsetIsoMonth(date, months) {
+  const [year, month, day] = date.split("-").map(Number);
+  const firstOfTarget = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastDay = new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth() + 1, 0)).getUTCDate();
+  firstOfTarget.setUTCDate(Math.min(day, lastDay));
+  return firstOfTarget.toISOString().slice(0, 10);
 }
 
 async function getNoticeSearchOptions(env) {

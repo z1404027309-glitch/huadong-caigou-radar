@@ -99,7 +99,13 @@ const strictFocus = await strictFocusResponse.json();
 assert(strictFocus.items.every((item) => /数据中心|IDC/i.test(item.title)));
 assert(!strictFocus.items.some((item) => item.title.includes("市场竞争力提升服务")));
 
+const oneMonthResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E7%9C%81%E4%B8%80%E4%B8%AA%E6%9C%88%E5%86%85%E6%89%80%E6%9C%89%E8%BF%90%E8%90%A5%E5%95%86%E7%9A%84AI%E5%85%AC%E5%91%8A&limit=10"), env);
+const oneMonth = await oneMonthResponse.json();
+assert.equal(oneMonth.appliedFilters.publishStart, "2026-07-11");
+assert.equal(oneMonth.appliedFilters.publishEnd, "2026-08-11");
+assert.deepEqual(oneMonth.appliedFilters.keywords, []);
+
 console.log(JSON.stringify({
   options: { provinces: options.provinces.length, operators: options.operators.length, focusGroups: options.focusGroups.length },
-  searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total, strictFocus: strictFocus.total }
+  searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total, strictFocus: strictFocus.total, oneMonth: oneMonth.total }
 }, null, 2));
