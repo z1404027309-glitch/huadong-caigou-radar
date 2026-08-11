@@ -94,7 +94,12 @@ assert.equal(chineseDate.appliedFilters.publishStart, "2026-08-04");
 assert.equal(chineseDate.appliedFilters.publishEnd, "2026-08-04");
 assert.deepEqual(chineseDate.appliedFilters.keywords, []);
 
+const strictFocusResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E6%9C%AC%E6%9C%88%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83"), env);
+const strictFocus = await strictFocusResponse.json();
+assert(strictFocus.items.every((item) => /数据中心|IDC/i.test(item.title)));
+assert(!strictFocus.items.some((item) => item.title.includes("市场竞争力提升服务")));
+
 console.log(JSON.stringify({
   options: { provinces: options.provinces.length, operators: options.operators.length, focusGroups: options.focusGroups.length },
-  searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total }
+  searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total, strictFocus: strictFocus.total }
 }, null, 2));

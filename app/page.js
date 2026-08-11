@@ -907,15 +907,21 @@ function extractPurchaseContent(text) {
 function matchesQuickQuery(item, query, focusRules) {
   const term = String(query || "").trim().toLowerCase();
   if (!term) return true;
-  const haystack = `${item.title || ""} ${item.region || ""} ${item.operator || ""} ${item.purchaseContent || ""}`.toLowerCase();
-  if (haystack.includes(term)) return true;
-
-  return focusRules.some((rule) => {
-    const operatorOk = rule.operator === "全部运营商" || rule.operator === item.operator;
+  const matchingRules = focusRules.filter((rule) => {
     const aliases = [rule.name, ...(rule.keywords || [])].map((value) => String(value).toLowerCase());
-    const queryMatchesRule = aliases.some((alias) => alias.includes(term) || term.includes(alias));
-    return operatorOk && queryMatchesRule && aliases.some((alias) => haystack.includes(alias));
+    return aliases.some((alias) => alias.includes(term) || term.includes(alias));
   });
+  if (matchingRules.length) {
+    const title = String(item.title || "").toLowerCase();
+    return matchingRules.some((rule) => {
+      const operatorOk = rule.operator === "全部运营商" || rule.operator === item.operator;
+      const aliases = [rule.name, ...(rule.keywords || [])].map((value) => String(value).toLowerCase());
+      return operatorOk && aliases.some((alias) => title.includes(alias));
+    });
+  }
+
+  const haystack = `${item.title || ""} ${item.region || ""} ${item.operator || ""} ${item.purchaseContent || ""}`.toLowerCase();
+  return haystack.includes(term);
 }
 
 function looksLikeTableNoise(value) {

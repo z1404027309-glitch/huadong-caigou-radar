@@ -473,9 +473,10 @@ function matchesStructuredNoticeSearch(item, filters, focusRules) {
   if (filters.keywords.some((keyword) => !haystack.includes(normalizeSearchText(keyword)))) return false;
   if (filters.focusCategories.length) {
     const selected = focusRules.filter((rule) => filters.focusCategories.includes(rule.name) || filters.focusCategories.includes(rule.groupName));
+    const title = normalizeSearchText(item.title);
     if (!selected.length || !selected.some((rule) =>
       (rule.operator === "全部运营商" || rule.operator === item.operator)
-      && rule.keywords.some((keyword) => haystack.includes(normalizeSearchText(keyword)))
+      && rule.keywords.some((keyword) => title.includes(normalizeSearchText(keyword)))
     )) return false;
   }
   return true;
