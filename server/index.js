@@ -2,6 +2,8 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/notices") return getNotices(url, env);
+    if (url.pathname === "/api/notices/search") return searchNotices(request, url, env);
+    if (url.pathname === "/api/notices/search-options") return getNoticeSearchOptions(env);
     if (url.pathname === "/api/refresh") return handleRefresh(request, env);
     if (url.pathname === "/api/refresh-needed") return getRefreshNeeded(env);
     if (url.pathname === "/api/refresh-finish") return finishRefresh(request, env);
@@ -211,6 +213,9 @@ async function ensureFocusSchema(db) {
 
 const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryDetail";
 const ARCHIVE_SOURCES = ["mobile", "unicom", "tower", "telecom"];
+const SUPPORTED_PROVINCES = ["浙江", "江西", "福建"];
+const SUPPORTED_OPERATORS = ["中国移动", "中国联通", "中国铁塔", "中国电信"];
+const SUPPORTED_NOTICE_CATEGORIES = ["采购公告", "直接采购公告", "采购意见征求公告", "采购需求公示", "询比公告", "招标公告", "资格预审公告", "采购项目预公告"];
 const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const OIDC_AUDIENCE = "huadong-caigou-radar";
 const REFRESH_REPOSITORY = "z1404027309-glitch/huadong-caigou-radar";
@@ -262,6 +267,250 @@ async function getNotices(url, env) {
     telecomFetchedAt: archives.telecom || "",
     errors
   }, notices.length || !errors.length ? 200 : 502);
+}
+
+async function searchNotices(request, url, env) {
+  if (!['GET', 'POST'].includes(request.method)) return json({ success: false, error: "method_not_allowed" }, 405, "no-store");
+  const focusRules = await readFocusRules(env);
+  let body;
+  if (request.method === "GET") {
+    const query = String(url.searchParams.get("query") || url.searchParams.get("q") || "").trim();
+    body = parseNaturalNoticeQuery(query, focusRules);
+    if (url.searchParams.has("limit")) body.limit = url.searchParams.get("limit");
+  } else {
+    body = await request.json().catch(() => null);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return json({ success: false, error: "invalid_json_body" }, 400, "no-store");
+    }
+  }
+
+  const filters = normalizeNoticeSearchFilters(body);
+  if (filters.error) return json({ success: false, error: filters.error }, 400, "no-store");
+
+  const { notices, errors } = await loadNotices(url, env, filters.publishStart, filters.publishEnd);
+  const matched = notices
+    .filter((item) => matchesStructuredNoticeSearch(item, filters, focusRules))
+    .sort((a, b) => compareNotices(a, b, filters.sort));
+  const items = matched.slice(0, filters.limit).map(toPublicNoticeItem);
+
+  return json({
+    success: true,
+    total: matched.length,
+    returned: items.length,
+    appliedFilters: filters,
+    items,
+    ...(errors.length ? { sourceErrors: errors } : {})
+  }, 200, "no-store");
+}
+
+function parseNaturalNoticeQuery(query, focusRules) {
+  const today = new Date().toISOString().slice(0, 10);
+  const provinces = SUPPORTED_PROVINCES.filter((province) => query.includes(province));
+  const operators = SUPPORTED_OPERATORS.filter((operator) => query.includes(operator) || query.includes(operator.replace("中国", "")));
+  const noticeCategories = SUPPORTED_NOTICE_CATEGORIES.filter((category) => query.includes(category));
+  const focusCategories = [...new Set(focusRules.filter((rule) =>
+    query.includes(rule.name)
+    || query.includes(rule.groupName)
+    || rule.keywords.some((keyword) => normalizeSearchText(query).includes(normalizeSearchText(keyword)))
+  ).map((rule) => rule.name))];
+  const { publishStart, publishEnd } = naturalDateRange(query, today);
+
+  let keywordText = query;
+  const removable = [
+    ...SUPPORTED_PROVINCES.flatMap((value) => [value, `${value}省`]),
+    ...SUPPORTED_OPERATORS.flatMap((value) => [value, value.replace("中国", "")]),
+    ...SUPPORTED_NOTICE_CATEGORIES,
+    ...focusRules.flatMap((rule) => [rule.name, rule.groupName, ...rule.keywords]),
+    "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "查询", "搜索", "查找", "查一下", "帮我查", "看看",
+    "今天", "今日", "本日", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周"
+  ].sort((a, b) => b.length - a.length);
+  for (const value of removable) keywordText = keywordText.replaceAll(value, " ");
+  keywordText = keywordText.replace(/近\s*\d+\s*(?:日|天)|最近\s*\d+\s*(?:日|天)/g, " ");
+  const keywords = keywordText.split(/[\s,，;；、的]+/).map((value) => value.trim()).filter((value) => value.length >= 2);
+
+  return { provinces, operators, noticeCategories, focusCategories, keywords, publishStart, publishEnd, limit: 10 };
+}
+
+function naturalDateRange(query, today) {
+  if (/今天|今日|本日/.test(query)) return { publishStart: today, publishEnd: today };
+  const recent = query.match(/(?:近|最近)\s*(\d+)\s*(?:日|天)/);
+  if (recent) return { publishStart: offsetIsoDate(today, -(Math.min(365, Math.max(1, Number(recent[1]))) - 1)), publishEnd: today };
+  if (/一周内|近一周|最近一周/.test(query)) return { publishStart: offsetIsoDate(today, -6), publishEnd: today };
+  if (/本周|这周/.test(query)) {
+    const date = new Date(`${today}T00:00:00Z`);
+    const day = date.getUTCDay() || 7;
+    return { publishStart: offsetIsoDate(today, -(day - 1)), publishEnd: today };
+  }
+  if (/本月|这个月/.test(query)) return { publishStart: `${today.slice(0, 7)}-01`, publishEnd: today };
+  return { publishStart: "2025-01-01", publishEnd: today };
+}
+
+function offsetIsoDate(date, days) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+async function getNoticeSearchOptions(env) {
+  const groups = await readFocusGroups(env);
+  return json({
+    success: true,
+    provinces: SUPPORTED_PROVINCES,
+    operators: SUPPORTED_OPERATORS,
+    noticeCategories: SUPPORTED_NOTICE_CATEGORIES,
+    focusGroups: groups.map((group) => ({
+      name: group.name,
+      categories: group.rules.map((rule) => ({ name: rule.name, keywords: rule.keywords, operator: rule.operator }))
+    }))
+  }, 200, "public, max-age=60");
+}
+
+async function loadNotices(url, env, startDate, endDate) {
+  const notices = [];
+  const errors = [];
+  const storedArchives = await readStoredArchives(env);
+  for (const source of ARCHIVE_SOURCES) {
+    try {
+      let archive = storedArchives[source];
+      if (!archive) {
+        const response = await env.ASSETS.fetch(new Request(new URL(`/data/${source}-notices.json`, url.origin)));
+        if (!response.ok) throw new Error(`archive ${response.status}`);
+        archive = await response.json();
+      }
+      notices.push(...(archive.notices || [])
+        .filter((item) => item.date >= startDate && item.date <= endDate)
+        .map(normalizeCategory));
+    } catch (error) {
+      errors.push(`${source}: ${String(error?.message || error)}`);
+    }
+  }
+  return { notices, errors };
+}
+
+function normalizeNoticeSearchFilters(body) {
+  const today = new Date().toISOString().slice(0, 10);
+  const publishStart = validDate(body.publishStart || body.startDate) || "2025-01-01";
+  const publishEnd = validDate(body.publishEnd || body.endDate) || today;
+  const deadlineStart = validDate(body.deadlineStart) || "";
+  const deadlineEnd = validDate(body.deadlineEnd) || "";
+  if (publishStart > publishEnd || (deadlineStart && deadlineEnd && deadlineStart > deadlineEnd)) {
+    return { error: "invalid_date_range" };
+  }
+  return {
+    provinces: normalizeAllowedList(body.provinces ?? body.province, SUPPORTED_PROVINCES, normalizeProvince),
+    operators: normalizeAllowedList(body.operators ?? body.operator, SUPPORTED_OPERATORS, normalizeOperator),
+    noticeCategories: normalizeAllowedList(body.noticeCategories ?? body.noticeCategory, SUPPORTED_NOTICE_CATEGORIES),
+    focusCategories: normalizeStringList(body.focusCategories ?? body.focusCategory, 10),
+    keywords: normalizeStringList(body.keywords ?? body.keyword ?? body.q, 10),
+    publishStart,
+    publishEnd,
+    deadlineStart,
+    deadlineEnd,
+    budgetMin: normalizeBudgetFilter(body.budgetMin),
+    budgetMax: normalizeBudgetFilter(body.budgetMax),
+    sort: ["publishDate_desc", "publishDate_asc", "budget_desc", "deadline_asc"].includes(body.sort) ? body.sort : "publishDate_desc",
+    limit: Math.min(50, Math.max(1, Number.parseInt(body.limit || "10", 10) || 10))
+  };
+}
+
+function normalizeAllowedList(value, allowed, mapper = (item) => item) {
+  return [...new Set(normalizeStringList(value, allowed.length).map(mapper).filter((item) => allowed.includes(item)))];
+}
+
+function normalizeStringList(value, max) {
+  const list = Array.isArray(value) ? value : value == null || value === "" ? [] : [value];
+  return [...new Set(list.map((item) => String(item).trim()).filter(Boolean))].slice(0, max);
+}
+
+function normalizeProvince(value) {
+  return String(value || "").replace(/省$/, "");
+}
+
+function normalizeOperator(value) {
+  const short = String(value || "").replace(/^中国/, "").replace(/运营商$/, "");
+  return ({ 移动: "中国移动", 联通: "中国联通", 铁塔: "中国铁塔", 电信: "中国电信" })[short] || String(value || "");
+}
+
+function normalizeBudgetFilter(value) {
+  if (value === "" || value == null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function matchesStructuredNoticeSearch(item, filters, focusRules) {
+  const province = String(item.region || item.province || "");
+  if (filters.provinces.length && !filters.provinces.includes(province)) return false;
+  if (filters.operators.length && !filters.operators.includes(String(item.operator || ""))) return false;
+  if (filters.noticeCategories.length && !filters.noticeCategories.includes(String(item.category || ""))) return false;
+
+  const deadline = firstDate(item.deadline || item.responseDeadline || item.bidDeadline);
+  if (filters.deadlineStart && (!deadline || deadline < filters.deadlineStart)) return false;
+  if (filters.deadlineEnd && (!deadline || deadline > filters.deadlineEnd)) return false;
+
+  const budget = parseBudgetWan(item.budget);
+  if (filters.budgetMin != null && (budget == null || budget < filters.budgetMin)) return false;
+  if (filters.budgetMax != null && (budget == null || budget > filters.budgetMax)) return false;
+
+  const haystack = noticeSearchHaystack(item);
+  if (filters.keywords.some((keyword) => !haystack.includes(normalizeSearchText(keyword)))) return false;
+  if (filters.focusCategories.length) {
+    const selected = focusRules.filter((rule) => filters.focusCategories.includes(rule.name) || filters.focusCategories.includes(rule.groupName));
+    if (!selected.length || !selected.some((rule) =>
+      (rule.operator === "全部运营商" || rule.operator === item.operator)
+      && rule.keywords.some((keyword) => haystack.includes(normalizeSearchText(keyword)))
+    )) return false;
+  }
+  return true;
+}
+
+function noticeSearchHaystack(item) {
+  return normalizeSearchText([item.title, item.purchaseContent, item.category, item.noticeType, item.projectNo, item.qualification, item.performance].filter(Boolean).join(" "));
+}
+
+function parseBudgetWan(value) {
+  const text = String(value || "").replace(/,/g, "");
+  const match = text.match(/([\d.]+)\s*(亿元|万元|元)/);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  return match[2] === "亿元" ? number * 10000 : match[2] === "元" ? number / 10000 : number;
+}
+
+function compareNotices(a, b, sort) {
+  if (sort === "publishDate_asc") return `${a.date} ${a.createDate || ""}`.localeCompare(`${b.date} ${b.createDate || ""}`);
+  if (sort === "budget_desc") return (parseBudgetWan(b.budget) ?? -1) - (parseBudgetWan(a.budget) ?? -1);
+  if (sort === "deadline_asc") return (firstDate(a.deadline || a.responseDeadline || a.bidDeadline) || "9999-12-31").localeCompare(firstDate(b.deadline || b.responseDeadline || b.bidDeadline) || "9999-12-31");
+  return `${b.date} ${b.createDate || ""}`.localeCompare(`${a.date} ${a.createDate || ""}`);
+}
+
+async function readFocusGroups(env) {
+  if (!env.DB) return DEFAULT_FOCUS_GROUPS.map((group) => ({
+    ...group,
+    rules: group.rules.map(([id, name, keywords]) => ({ id, name, keywords, operator: "全部运营商" }))
+  }));
+  await ensureFocusSchema(env.DB);
+  const [groupResult, ruleResult] = await Promise.all([
+    env.DB.prepare("SELECT id, name, created_at FROM focus_groups ORDER BY created_at ASC").all(),
+    env.DB.prepare("SELECT id, group_id, name, keywords, operator, created_at FROM focus_rules ORDER BY created_at ASC").all()
+  ]);
+  return (groupResult.results || []).map((group) => ({
+    ...group,
+    rules: (ruleResult.results || []).filter((rule) => rule.group_id === group.id).map((rule) => ({
+      id: rule.id,
+      name: rule.name,
+      keywords: safeKeywordList(rule.keywords),
+      operator: rule.operator || "全部运营商"
+    }))
+  }));
+}
+
+async function readFocusRules(env) {
+  const groups = await readFocusGroups(env);
+  return groups.flatMap((group) => group.rules.map((rule) => ({ ...rule, groupName: group.name })));
+}
+
+function safeKeywordList(value) {
+  try { return Array.isArray(value) ? value : JSON.parse(value || "[]"); } catch { return []; }
 }
 
 async function handleRefresh(request, env) {

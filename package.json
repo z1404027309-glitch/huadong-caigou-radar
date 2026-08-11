@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build && node scripts/prepare-cloudflare.mjs && node -e \"const f=require('fs');f.cpSync('out','dist/assets',{recursive:true});f.cpSync('server','dist/server',{recursive:true});f.cpSync('.openai','dist/.openai',{recursive:true})\"",
     "start": "next start",
+    "test:search": "node scripts/test-notice-search.mjs",
     "collect:mobile": "node scripts/collect-mobile.mjs",
     "collect:unicom": "node scripts/collect-unicom.mjs",
     "collect:tower": "node scripts/collect-tower.mjs",
