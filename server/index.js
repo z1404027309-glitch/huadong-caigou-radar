@@ -323,11 +323,9 @@ function parseNaturalNoticeQuery(query, focusRules) {
     ...SUPPORTED_NOTICE_CATEGORIES.filter((category) => query.includes(category)),
     ...noticeCategoryAliases.filter(([, pattern]) => pattern.test(query)).map(([category]) => category)
   ])];
-  const focusCategories = [...new Set(focusRules.filter((rule) =>
-    query.includes(rule.name)
-    || query.includes(rule.groupName)
-    || rule.keywords.some((keyword) => normalizeSearchText(query).includes(normalizeSearchText(keyword)))
-  ).map((rule) => rule.name))];
+  const directRuleNames = focusRules.filter((rule) => query.includes(rule.name)).map((rule) => rule.name);
+  const directGroupNames = focusRules.filter((rule) => query.includes(rule.groupName)).map((rule) => rule.groupName);
+  const focusCategories = [...new Set([...directRuleNames, ...directGroupNames])];
   const matchedFocusKeywords = [...new Set(focusRules.flatMap((rule) => rule.keywords)
     .filter((keyword) => normalizeSearchText(query).includes(normalizeSearchText(keyword))))];
   const { publishStart, publishEnd } = naturalDateRange(query, today);
@@ -351,9 +349,7 @@ function parseNaturalNoticeQuery(query, focusRules) {
   const extractedKeywords = keywordText.split(/[\s,，;；、的]+/)
     .map((value) => value.trim().replace(/^(?:关于|有关|相关)/, "").replace(/(?:相关|方面)$/u, ""))
     .filter((value) => value.length >= 2);
-  const keywords = matchedFocusKeywords.length
-    ? matchedFocusKeywords
-    : focusCategories.length ? [] : extractedKeywords;
+  const keywords = focusCategories.length ? [] : matchedFocusKeywords.length ? matchedFocusKeywords : extractedKeywords;
 
   return { provinces, operators, noticeCategories, focusCategories, keywords, publishStart, publishEnd, limit: 10 };
 }

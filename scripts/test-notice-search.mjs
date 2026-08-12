@@ -87,7 +87,7 @@ const natural = await naturalResponse.json();
 assert.equal(natural.success, true);
 assert.deepEqual(natural.appliedFilters.provinces, ["福建"]);
 assert.deepEqual(natural.appliedFilters.operators, []);
-assert(natural.appliedFilters.focusCategories.includes("AI应用"));
+assert.deepEqual(natural.appliedFilters.focusCategories, []);
 assert.deepEqual(natural.appliedFilters.keywords, ["AI"]);
 
 const explicitRangeResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=2026-08-04%20%E8%87%B3%202026-08-11%E7%A6%8F%E5%BB%BA%E6%89%80%E6%9C%89%E8%BF%90%E8%90%A5%E5%95%86%E7%9A%84AI%E5%85%AC%E5%91%8A&limit=10"), env);
@@ -148,7 +148,8 @@ assert(inquiry.items.every((item) => item.category === "询比公告" && item.so
 
 const classifiedKeywordsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E7%A7%BB%E5%8A%A8%E4%B8%80%E4%B8%AA%E6%9C%88%E5%86%85%E7%9A%84%E5%85%B3%E4%BA%8E%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83%E5%92%8C%E5%85%89%E4%BC%8F%E6%8B%9B%E6%A0%87%E9%87%87%E8%B4%AD%E9%A1%B9%E7%9B%AE"), env);
 const classifiedKeywords = await classifiedKeywordsResponse.json();
-assert.deepEqual(classifiedKeywords.appliedFilters.keywords.sort(), ["数据中心", "光伏"].sort());
+assert.deepEqual(classifiedKeywords.appliedFilters.focusCategories.sort(), ["数据中心", "光伏"].sort());
+assert.deepEqual(classifiedKeywords.appliedFilters.keywords, []);
 
 const halfYearSmartAppsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E8%BF%90%E8%90%A5%E5%95%86%E5%8D%8A%E5%B9%B4%E6%99%BA%E6%85%A7%E5%BA%94%E7%94%A8%E5%85%AC%E5%91%8A"), env);
 const halfYearSmartApps = await halfYearSmartAppsResponse.json();
@@ -164,6 +165,12 @@ const retryHalfYearSmartApps = await retryHalfYearSmartAppsResponse.json();
 assert.deepEqual(retryHalfYearSmartApps.appliedFilters.focusCategories, ["智慧应用"]);
 assert.deepEqual(retryHalfYearSmartApps.appliedFilters.keywords, []);
 assert.equal(retryHalfYearSmartApps.total, halfYearSmartApps.total);
+
+const digitalGovernmentResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("一个月内浙江数字政府公告")}&limit=10`), env);
+const digitalGovernment = await digitalGovernmentResponse.json();
+assert.deepEqual(digitalGovernment.appliedFilters.focusCategories, ["数字政府"]);
+assert.deepEqual(digitalGovernment.appliedFilters.keywords, []);
+assert(digitalGovernment.items.some((item) => item.title.includes("电子政务")));
 
 console.log(JSON.stringify({
   options: { provinces: options.provinces.length, operators: options.operators.length, focusGroups: options.focusGroups.length },
