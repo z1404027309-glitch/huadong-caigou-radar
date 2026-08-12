@@ -458,10 +458,9 @@ export default function Home() {
             <Kpi label="高相关项目" value={highRelevance.length} note="商机评分 ≥ 70" accent />
           </div>
           <section className="market-trends">
-            <div className="market-trends-head"><div><h2>市场趋势</h2><p>{startDate} 至 {endDate}，对比上一同长度周期</p></div><span>{marketTrends.granularity === "week" ? "按周统计" : "按日统计"}</span></div>
-            <article className="trend-metric trend-volume"><header><div><span>公告数量趋势</span><strong>{marketTrends.volume.current} 条</strong></div><Change value={marketTrends.volume.change} /></header><div className="bar-chart">{marketTrends.volume.series.map((day) => <div className="bar-col" key={day.date} title={`${day.date}: ${day.count}条`}><i style={{ height: `${Math.max(8, day.height)}%` }} /><small>{day.label}</small></div>)}</div><p>上一周期 {marketTrends.volume.previous} 条</p></article>
-            <article className="trend-metric"><header><div><span>预算趋势</span><strong>{formatCurrency(marketTrends.budget.total)}</strong></div><Change value={marketTrends.budget.change} /></header><dl><div><dt>平均预算</dt><dd>{formatCurrency(marketTrends.budget.average)}</dd></div><div><dt>已识别预算</dt><dd>{marketTrends.budget.recognized} 条</dd></div><div><dt>上期总预算</dt><dd>{formatCurrency(marketTrends.budget.previousTotal)}</dd></div></dl><p>仅统计明确识别预算的公告</p></article>
-            <article className="trend-metric"><header><div><span>热点趋势</span><strong>{marketTrends.hotspots.length} 个分类</strong></div></header><div className="hotspot-list">{marketTrends.hotspots.length ? marketTrends.hotspots.slice(0, 6).map((item) => <div key={item.name}><span>{item.name}</span><b>{item.current}</b><small>上期 {item.previous}</small><Change value={item.change} /></div>) : <EmptyMini text="请先配置重点分类" />}</div><p>按网站重点分类规则统计</p></article>
+            <div className="market-trends-head"><div><h2>市场趋势</h2><p>每日公告总量与业务方向变化 · 对比上一同长度周期</p></div><span>按日统计</span></div>
+            <article className="trend-metric trend-volume"><header><div><span>公告数量趋势</span><strong>{marketTrends.volume.current} 条</strong></div><Change value={marketTrends.volume.change} /></header><div className="bar-chart">{marketTrends.volume.series.map((day) => <div className="bar-col" key={day.date} title={`${day.date}: ${day.count}条`}><b>{day.count}</b><i style={{ height: `${Math.max(8, day.height)}%` }} /><small>{day.label}</small></div>)}</div><p><span>每天柱顶显示公告数量</span><span>上一周期 {marketTrends.volume.previous} 条</span></p></article>
+            <article className="trend-metric business-direction"><header><div><span>业务方向洞察</span><strong>{marketTrends.hotspots.length} 个分类</strong></div></header><div className="hotspot-list">{marketTrends.hotspots.length ? marketTrends.hotspots.slice(0, 6).map((item) => <div key={item.name}><span>{item.name}</span><b>{item.current}</b><small>上期 {item.previous}</small><Change value={item.change} /></div>) : <EmptyMini text="请先配置重点分类" />}</div>{marketTrends.fastest ? <p className="fastest-focus">本期增长最快：{marketTrends.fastest.name}</p> : <p>按网站重点分类规则统计</p>}</article>
           </section>
           <div className="dashboard-grid dashboard-grid-refined">
             <Panel title="商机评分 TOP 4" subtitle="按当前评分规则排序" action={<button onClick={() => setActiveView("ranking")}>更多 →</button>}><div className="score-list">{scoredNotices.slice().sort((a,b)=>b.score-a.score).slice(0,4).map((item)=><button key={item.id} onClick={()=>{setQuery(item.title);setActiveView("list")}}><span>{item.title}</span><i><b style={{width:`${item.score}%`}} /></i><strong>{item.score}</strong></button>)}</div></Panel>
@@ -779,26 +778,17 @@ function changePercent(current, previous) {
 function buildTrend(notices, startDate, endDate) {
   const grouped = new Map();
   notices.forEach((item) => item.date && grouped.set(item.date, (grouped.get(item.date) || 0) + 1));
-  const period = previousPeriod(startDate, endDate);
-  const weekly = period.days > 31;
   const rows = [];
   const last = new Date(`${endDate}T00:00:00Z`);
-  for (let cursor = new Date(`${startDate}T00:00:00Z`); cursor <= last; cursor = new Date(cursor.getTime() + (weekly ? 7 : 1) * 86400000)) {
+  for (let cursor = new Date(`${startDate}T00:00:00Z`); cursor <= last; cursor = new Date(cursor.getTime() + 86400000)) {
     const date = cursor.toISOString().slice(0, 10);
-    if (weekly) {
-      const weekEnd = new Date(Math.min(last.getTime(), cursor.getTime() + 6 * 86400000)).toISOString().slice(0, 10);
-      rows.push([date, notices.filter((item) => item.date >= date && item.date <= weekEnd).length]);
-    } else rows.push([date, grouped.get(date) || 0]);
+    rows.push([date, grouped.get(date) || 0]);
   }
   const max = Math.max(1, ...rows.map(([, count]) => count));
   return rows.map(([date, count]) => ({ date, count, height: count / max * 88, label: date.slice(5).replace("-", "/") }));
 }
 
 function buildMarketTrends(currentNotices, previousNotices, startDate, endDate, groups, rules) {
-  const currentBudgets = currentNotices.map((item) => parseBudget(item.budget)).filter((value) => value > 0);
-  const previousBudgets = previousNotices.map((item) => parseBudget(item.budget)).filter((value) => value > 0);
-  const currentBudgetTotal = currentBudgets.reduce((sum, value) => sum + value, 0);
-  const previousBudgetTotal = previousBudgets.reduce((sum, value) => sum + value, 0);
   const hotspots = groups.map((group) => {
     const groupRules = rules.filter((rule) => rule.groupId === group.id);
     const matches = (item) => groupRules.some((rule) => (rule.operator === "全部运营商" || rule.operator === item.operator) && rule.keywords.some((word) => `${item.title} ${item.purchaseContent || ""}`.toLowerCase().includes(word.toLowerCase())));
@@ -806,12 +796,10 @@ function buildMarketTrends(currentNotices, previousNotices, startDate, endDate, 
     const previous = previousNotices.filter(matches).length;
     return { name: group.name, current, previous, change: changePercent(current, previous) };
   }).sort((a, b) => b.current - a.current);
-  const period = previousPeriod(startDate, endDate);
   return {
-    granularity: period.days > 31 ? "week" : "day",
     volume: { current: currentNotices.length, previous: previousNotices.length, change: changePercent(currentNotices.length, previousNotices.length), series: buildTrend(currentNotices, startDate, endDate) },
-    budget: { total: currentBudgetTotal, average: currentBudgets.length ? currentBudgetTotal / currentBudgets.length : 0, recognized: currentBudgets.length, previousTotal: previousBudgetTotal, change: changePercent(currentBudgetTotal, previousBudgetTotal) },
-    hotspots
+    hotspots,
+    fastest: hotspots.filter((item) => item.current > 0).sort((a, b) => b.change - a.change)[0] || null
   };
 }
 
