@@ -126,6 +126,14 @@ assert.equal(eightMonths.appliedFilters.publishStart, offsetMonth(today, 8));
 assert.equal(eightMonths.appliedFilters.publishEnd, today);
 assert.deepEqual(eightMonths.appliedFilters.keywords, ["AI"]);
 
+for (const [phrase, months] of [["近2个月", 2], ["三个月内", 3], ["过去十二个月", 12], ["18个月以内", 18]]) {
+  const response = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent(`福建${phrase}数据中心`)}`), env);
+  const result = await response.json();
+  assert.equal(result.appliedFilters.publishStart, offsetMonth(today, months), phrase);
+  assert.equal(result.appliedFilters.publishEnd, today, phrase);
+  assert(!result.appliedFilters.keywords.some((keyword) => keyword.includes("月")), phrase);
+}
+
 const powerTenderResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E7%A7%BB%E5%8A%A8%E4%B8%80%E4%B8%AA%E6%9C%88%E5%86%85%E7%9A%84%E5%85%B3%E4%BA%8E%E7%94%B5%E6%BA%90%E6%8B%9B%E6%A0%87%E9%87%87%E8%B4%AD%E9%A1%B9%E7%9B%AE"), env);
 const powerTender = await powerTenderResponse.json();
 assert.deepEqual(powerTender.appliedFilters.provinces, ["福建"]);

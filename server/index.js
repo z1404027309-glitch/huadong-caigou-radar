@@ -346,7 +346,7 @@ function parseNaturalNoticeQuery(query, focusRules) {
   keywordText = keywordText.replace(/近\s*\d+\s*(?:日|天)|最近\s*\d+\s*(?:日|天)/g, " ");
   keywordText = keywordText.replace(/20\d{2}(?:年|[-/.])\d{1,2}(?:月|[-/.])\d{1,2}日?/g, " ");
   keywordText = keywordText.replace(/\d{1,2}月\d{1,2}日/g, " ");
-  keywordText = keywordText.replace(/(?:近|最近)\s*\d+\s*个?月(?:内)?|\d+\s*个月(?:内)?/g, " ");
+  keywordText = keywordText.replace(/(?:近|最近|过去|前)?\s*(?:\d+|[一二两三四五六七八九十百]+)\s*个?月(?:之?内|以内|来)?/g, " ");
   keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
   const extractedKeywords = keywordText.split(/[\s,，;；、的]+/)
     .map((value) => value.trim().replace(/^(?:关于|有关|相关)/, "").replace(/(?:相关|方面)$/u, ""))
@@ -378,11 +378,8 @@ function naturalDateRange(query, today) {
   const recent = query.match(/(?:近|最近)\s*(\d+)\s*(?:日|天)/);
   if (recent) return { publishStart: offsetIsoDate(today, -(Math.min(365, Math.max(1, Number(recent[1]))) - 1)), publishEnd: today };
   if (/一周内|近一周|最近一周/.test(query)) return { publishStart: offsetIsoDate(today, -6), publishEnd: today };
-  const recentMonths = query.match(/(?:近|最近)\s*(\d+)\s*个?月(?:内)?|(\d+)\s*个月(?:内)?/);
-  if (recentMonths) {
-    const count = Number(recentMonths[1] || recentMonths[2]);
-    return { publishStart: offsetIsoMonth(today, -Math.min(12, Math.max(1, count))), publishEnd: today };
-  }
+  const recentMonths = parseMonthDuration(query);
+  if (recentMonths) return { publishStart: offsetIsoMonth(today, -recentMonths), publishEnd: today };
   if (/一个月内|近一个月|最近一个月/.test(query)) return { publishStart: offsetIsoMonth(today, -1), publishEnd: today };
   if (/半年(?:内)?|近半年|最近半年/.test(query)) return { publishStart: offsetIsoMonth(today, -6), publishEnd: today };
   if (/本周|这周/.test(query)) {
@@ -412,6 +409,28 @@ function offsetIsoMonth(date, months) {
   const lastDay = new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth() + 1, 0)).getUTCDate();
   firstOfTarget.setUTCDate(Math.min(day, lastDay));
   return firstOfTarget.toISOString().slice(0, 10);
+}
+
+function parseMonthDuration(query) {
+  const match = String(query || "").match(/(?:近|最近|过去|前)?\s*(\d+|[一二两三四五六七八九十百]+)\s*个?月(?:之?内|以内|来)?/);
+  if (!match) return 0;
+  const count = /^\d+$/.test(match[1]) ? Number(match[1]) : chineseInteger(match[1]);
+  return Number.isInteger(count) && count > 0 ? Math.min(120, count) : 0;
+}
+
+function chineseInteger(value) {
+  const digits = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (value === "十") return 10;
+  if (value === "百") return 100;
+  if (value.includes("百")) {
+    const [hundreds, rest = ""] = value.split("百");
+    return (digits[hundreds] || 1) * 100 + chineseInteger(rest);
+  }
+  if (value.includes("十")) {
+    const [tens, ones = ""] = value.split("十");
+    return (digits[tens] || 1) * 10 + (digits[ones] || 0);
+  }
+  return digits[value] || 0;
 }
 
 async function getNoticeSearchOptions(env) {
