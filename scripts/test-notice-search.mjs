@@ -42,6 +42,7 @@ const optionsResponse = await worker.fetch(new Request("https://local.test/api/n
 const options = await optionsResponse.json();
 assert.deepEqual(options.provinces, ["浙江", "江西", "福建"]);
 assert.equal(options.operators.length, 4);
+assert.deepEqual(options.noticeCategories, ["招采公告", "询比公告", "采购需求", "预公告"]);
 assert(options.focusGroups.some((group) => group.categories.some((category) => category.name === "数据中心")));
 
 const dataCenter = await search({
@@ -131,6 +132,11 @@ assert.deepEqual(powerTender.appliedFilters.provinces, ["福建"]);
 assert.deepEqual(powerTender.appliedFilters.operators, ["中国移动"]);
 assert.deepEqual(powerTender.appliedFilters.noticeCategories, ["招采公告"]);
 assert.deepEqual(powerTender.appliedFilters.keywords, ["电源"]);
+
+const inquiryResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E4%B8%AD%E5%9B%BD%E7%A7%BB%E5%8A%A8%E8%AF%A2%E6%AF%94%E5%85%AC%E5%91%8A&limit=50"), env);
+const inquiry = await inquiryResponse.json();
+assert.deepEqual(inquiry.appliedFilters.noticeCategories, ["询比公告"]);
+assert(inquiry.items.every((item) => item.category === "询比公告" && item.sourceCategory === "询比公告"));
 
 const classifiedKeywordsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E7%A7%BB%E5%8A%A8%E4%B8%80%E4%B8%AA%E6%9C%88%E5%86%85%E7%9A%84%E5%85%B3%E4%BA%8E%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83%E5%92%8C%E5%85%89%E4%BC%8F%E6%8B%9B%E6%A0%87%E9%87%87%E8%B4%AD%E9%A1%B9%E7%9B%AE"), env);
 const classifiedKeywords = await classifiedKeywordsResponse.json();

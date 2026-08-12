@@ -782,6 +782,8 @@ function toPublicNoticeItem(item) {
     publishDate: firstDate(item.date || item.publishDate || item.createDate),
     deadline: firstDate(item.deadline || item.responseDeadline || item.bidDeadline),
     budget: String(item.budget || ""),
+    category: String(item.category || ""),
+    sourceCategory: String(item.sourceCategory || ""),
     url: String(item.url || "")
   };
 }
@@ -798,13 +800,29 @@ function firstDate(value) {
 function normalizeCategory(item) {
   const title = item.title || "";
   let sourceCategory = item.sourceCategory || item.category || "采购公告";
-  if (!item.category) {
+  const titleCategory = inferTitleCategory(title);
+  if (titleCategory) {
+    sourceCategory = titleCategory;
+  } else if (!item.category) {
     if (item.operator === "中国联通") sourceCategory = /采购需求/.test(title) ? "采购需求公示" : /招标/.test(title) ? "招标公告" : "询比公告";
     if (item.operator === "中国电信") sourceCategory = /资格预审/.test(title) ? "资格预审公告" : /招标/.test(title) ? "招标公告" : "询比公告";
     if (item.operator === "中国铁塔") sourceCategory = String(item.noticeType) === "49" || /预公告|采购计划发布/.test(title) ? "采购项目预公告" : "采购公告";
   }
   const category = Object.entries(NOTICE_CATEGORY_GROUPS).find(([, values]) => values.includes(sourceCategory))?.[0] || "招采公告";
   return { ...item, sourceCategory, category };
+}
+
+function inferTitleCategory(title) {
+  const text = String(title || "").replace(/\s+/g, "");
+  if (/询比(?:采购)?公告|询价公告|比选公告/.test(text)) return "询比公告";
+  if (/采购意见征求公告|意见征求公告|征求意见公告/.test(text)) return "采购意见征求公告";
+  if (/采购需求公示|采购需求公告/.test(text)) return "采购需求公示";
+  if (/资格预审公告/.test(text)) return "资格预审公告";
+  if (/采购项目预公告|采购预公告|项目预公告/.test(text)) return "采购项目预公告";
+  if (/直接采购公告|单一来源采购公告/.test(text)) return "直接采购公告";
+  if (/招标公告/.test(text)) return "招标公告";
+  if (/采购公告/.test(text)) return "采购公告";
+  return "";
 }
 
 async function getDocument(url) {

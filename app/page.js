@@ -181,7 +181,7 @@ export default function Home() {
           cell(item.date || ""),
           cell(item.region || ""),
           cell(item.operator || "中国移动"),
-          cell(item.category || "采购公告"),
+          cell(item.sourceCategory || item.category || "采购公告"),
           cell(item.title || ""),
           cell(value(item, "purchaseContent")),
           cell(value(item, "budget")),
@@ -477,7 +477,7 @@ export default function Home() {
             <div className="ranking-head"><span>排名</span><span>公告信息</span><span>评分明细</span><span>总分</span></div>
             {scoredNotices.slice().sort((a,b)=>b.score-a.score).map((item,index)=><article className="ranking-row" key={item.id}>
               <strong className={`rank-number ${index < 3 ? "top" : ""}`}>{index + 1}</strong>
-              <div className="rank-info"><div><span>{item.region}</span><span>{item.operator}</span><span>{item.category}</span></div><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a></div>
+              <div className="rank-info"><div><span>{item.region}</span><span>{item.operator}</span><span>{item.sourceCategory || item.category}</span></div><a href={item.url} target="_blank" rel="noreferrer">{item.title}</a></div>
               <div className="score-breakdown">{Object.entries(item.scoreParts).map(([id,part])=><span key={id}>{part.name} {part.score}/{part.maxScore}</span>)}</div>
               <strong className="rank-score">{item.score}</strong>
             </article>)}
@@ -589,17 +589,17 @@ export default function Home() {
                     <span className="region" style={{ color: colors[item.region], background: `${colors[item.region]}12` }}>{item.region}</span>
                     {item.date && <time>{item.date}</time>}
                     <span className="operator-badge">{item.operator || "中国移动"}</span>
-                    <span className="category-badge">{item.category || "采购公告"}</span>
+                    <span className="category-badge">{item.sourceCategory || item.category || "采购公告"}</span>
                     <span className={`extract-state ${item.extractionStatus?.includes("正在") ? "working" : ""}`}>{item.extractionStatus}</span>
                     <span className={`quality-badge ${quality.missing.length ? "review" : "complete"}`}>{quality.missing.length ? `待复核 ${quality.missing.length} 项` : "字段完整"}</span><strong className="notice-score">{scored.score} 分</strong>
                   </div>
                   <h3>{item.title}</h3>
-                  {item.category !== "采购意见征求公告" && (
+                  {item.sourceCategory !== "采购意见征求公告" && (
                     <div className="detail-grid">
                       <Detail label="采购内容" value={cleanPurchaseContent(item.purchaseContent)} wide />
-                      {item.category !== "采购项目预公告" && <Detail label="采购预算金额" value={item.budget} />}
-                      {item.category !== "采购项目预公告" && <Detail label="采购文件售卖时间" value={item.saleTime} />}
-                      {item.category !== "采购项目预公告" && <Detail label="应答截止时间" value={item.deadline} />}
+                      {item.sourceCategory !== "采购项目预公告" && <Detail label="采购预算金额" value={item.budget} />}
+                      {item.sourceCategory !== "采购项目预公告" && <Detail label="采购文件售卖时间" value={item.saleTime} />}
+                      {item.sourceCategory !== "采购项目预公告" && <Detail label="应答截止时间" value={item.deadline} />}
                     </div>
                   )}
                   <div className="notice-foot">
@@ -676,8 +676,8 @@ function isMissing(value) {
 }
 
 function fieldCompleteness(item) {
-  if (item.category === "采购意见征求公告") return { percent: 100, missing: [] };
-  const fields = item.category === "采购项目预公告"
+  if (item.sourceCategory === "采购意见征求公告") return { percent: 100, missing: [] };
+  const fields = item.sourceCategory === "采购项目预公告"
     ? [["采购内容", item.purchaseContent]]
     : [["采购内容", item.purchaseContent], ["采购预算", item.budget], ["文件获取时间", item.saleTime], ["应答截止时间", item.deadline], ["资格要求", item.qualification], ["业绩要求", item.performance]];
   const missing = fields.filter(([, value]) => isMissing(value)).map(([label]) => label);
