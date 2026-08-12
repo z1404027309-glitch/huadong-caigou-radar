@@ -215,7 +215,13 @@ const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/
 const ARCHIVE_SOURCES = ["mobile", "unicom", "tower", "telecom"];
 const SUPPORTED_PROVINCES = ["浙江", "江西", "福建"];
 const SUPPORTED_OPERATORS = ["中国移动", "中国联通", "中国铁塔", "中国电信"];
-const SUPPORTED_NOTICE_CATEGORIES = ["采购公告", "直接采购公告", "采购意见征求公告", "采购需求公示", "询比公告", "招标公告", "资格预审公告", "采购项目预公告"];
+const NOTICE_CATEGORY_GROUPS = {
+  "招采公告": ["招标公告", "采购公告", "直接采购公告"],
+  "询比公告": ["询比公告"],
+  "采购需求": ["采购意见征求公告", "采购需求公示"],
+  "预公告": ["资格预审公告", "采购项目预公告"]
+};
+const SUPPORTED_NOTICE_CATEGORIES = Object.keys(NOTICE_CATEGORY_GROUPS);
 const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const OIDC_AUDIENCE = "huadong-caigou-radar";
 const REFRESH_REPOSITORY = "z1404027309-glitch/huadong-caigou-radar";
@@ -307,12 +313,23 @@ function parseNaturalNoticeQuery(query, focusRules) {
   const today = new Date().toISOString().slice(0, 10);
   const provinces = SUPPORTED_PROVINCES.filter((province) => query.includes(province));
   const operators = SUPPORTED_OPERATORS.filter((operator) => query.includes(operator) || query.includes(operator.replace("中国", "")));
-  const noticeCategories = SUPPORTED_NOTICE_CATEGORIES.filter((category) => query.includes(category));
+  const noticeCategoryAliases = [
+    ["招采公告", /招采公告|招标|采购公告|直接采购|单一来源/],
+    ["采购需求", /采购需求|意见征求|征求意见|需求公示/],
+    ["询比公告", /询比|比选/],
+    ["预公告", /预公告|资格预审/]
+  ];
+  const noticeCategories = [...new Set([
+    ...SUPPORTED_NOTICE_CATEGORIES.filter((category) => query.includes(category)),
+    ...noticeCategoryAliases.filter(([, pattern]) => pattern.test(query)).map(([category]) => category)
+  ])];
   const focusCategories = [...new Set(focusRules.filter((rule) =>
     query.includes(rule.name)
     || query.includes(rule.groupName)
     || rule.keywords.some((keyword) => normalizeSearchText(query).includes(normalizeSearchText(keyword)))
   ).map((rule) => rule.name))];
+  const matchedFocusKeywords = [...new Set(focusRules.flatMap((rule) => rule.keywords)
+    .filter((keyword) => normalizeSearchText(query).includes(normalizeSearchText(keyword))))];
   const { publishStart, publishEnd } = naturalDateRange(query, today);
 
   let keywordText = query;
@@ -320,9 +337,10 @@ function parseNaturalNoticeQuery(query, focusRules) {
     ...SUPPORTED_PROVINCES.flatMap((value) => [value, `${value}省`]),
     ...SUPPORTED_OPERATORS.flatMap((value) => [value, value.replace("中国", "")]),
     ...SUPPORTED_NOTICE_CATEGORIES,
+    "直接采购", "单一来源", "意见征求", "征求意见", "需求公示", "询比", "比选", "招标", "资格预审", "项目预公告", "采购预公告",
     ...focusRules.flatMap((rule) => [rule.name, rule.groupName, ...rule.keywords]),
-    "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "发布", "查询", "搜索", "查找", "查一下", "帮我查", "看看",
-    "今天", "今日", "本日", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周", "一个月内", "近一个月", "最近一个月"
+    "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "发布", "查询", "搜索", "查找", "查一下", "帮我查", "看看", "重新查询", "重新搜索", "重新查找", "重新查", "再查询", "再搜索", "再查一次", "重查", "关于", "有关", "相关", "方面", "一批",
+    "今天", "今日", "本日", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周", "一个月内", "近一个月", "最近一个月", "半年", "半年内", "近半年", "最近半年"
   ].sort((a, b) => b.length - a.length);
   for (const value of removable) keywordText = keywordText.replaceAll(value, " ");
   keywordText = keywordText.replace(/近\s*\d+\s*(?:日|天)|最近\s*\d+\s*(?:日|天)/g, " ");
@@ -330,7 +348,12 @@ function parseNaturalNoticeQuery(query, focusRules) {
   keywordText = keywordText.replace(/\d{1,2}月\d{1,2}日/g, " ");
   keywordText = keywordText.replace(/(?:近|最近)\s*\d+\s*个?月(?:内)?|\d+\s*个月(?:内)?/g, " ");
   keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
-  const keywords = keywordText.split(/[\s,，;；、的]+/).map((value) => value.trim()).filter((value) => value.length >= 2);
+  const extractedKeywords = keywordText.split(/[\s,，;；、的]+/)
+    .map((value) => value.trim().replace(/^(?:关于|有关|相关)/, "").replace(/(?:相关|方面)$/u, ""))
+    .filter((value) => value.length >= 2);
+  const keywords = matchedFocusKeywords.length
+    ? matchedFocusKeywords
+    : focusCategories.length ? [] : extractedKeywords;
 
   return { provinces, operators, noticeCategories, focusCategories, keywords, publishStart, publishEnd, limit: 10 };
 }
@@ -361,6 +384,7 @@ function naturalDateRange(query, today) {
     return { publishStart: offsetIsoMonth(today, -Math.min(12, Math.max(1, count))), publishEnd: today };
   }
   if (/一个月内|近一个月|最近一个月/.test(query)) return { publishStart: offsetIsoMonth(today, -1), publishEnd: today };
+  if (/半年(?:内)?|近半年|最近半年/.test(query)) return { publishStart: offsetIsoMonth(today, -6), publishEnd: today };
   if (/本周|这周/.test(query)) {
     const date = new Date(`${today}T00:00:00Z`);
     const day = date.getUTCDay() || 7;
@@ -772,13 +796,15 @@ function firstDate(value) {
 }
 
 function normalizeCategory(item) {
-  if (item.category) return item;
   const title = item.title || "";
-  let category = "采购公告";
-  if (item.operator === "中国联通") category = /采购需求/.test(title) ? "采购需求公示" : /招标/.test(title) ? "招标公告" : "询比公告";
-  if (item.operator === "中国电信") category = /资格预审/.test(title) ? "资格预审公告" : /招标/.test(title) ? "招标公告" : "询比公告";
-  if (item.operator === "中国铁塔") category = String(item.noticeType) === "49" || /预公告|采购计划发布/.test(title) ? "采购项目预公告" : "采购公告";
-  return { ...item, category };
+  let sourceCategory = item.sourceCategory || item.category || "采购公告";
+  if (!item.category) {
+    if (item.operator === "中国联通") sourceCategory = /采购需求/.test(title) ? "采购需求公示" : /招标/.test(title) ? "招标公告" : "询比公告";
+    if (item.operator === "中国电信") sourceCategory = /资格预审/.test(title) ? "资格预审公告" : /招标/.test(title) ? "招标公告" : "询比公告";
+    if (item.operator === "中国铁塔") sourceCategory = String(item.noticeType) === "49" || /预公告|采购计划发布/.test(title) ? "采购项目预公告" : "采购公告";
+  }
+  const category = Object.entries(NOTICE_CATEGORY_GROUPS).find(([, values]) => values.includes(sourceCategory))?.[0] || "招采公告";
+  return { ...item, sourceCategory, category };
 }
 
 async function getDocument(url) {

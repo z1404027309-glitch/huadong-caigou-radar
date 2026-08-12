@@ -6,7 +6,7 @@ const SOURCE = "https://b2b.10086.cn/b2b/main/listVendorNotice.html?noticeType=2
 const regions = ["全部", "浙江", "江西", "福建"];
 const colors = { 浙江: "#0f766e", 江西: "#b45309", 福建: "#2563eb" };
 const operators = ["全部运营商", "中国移动", "中国联通", "中国铁塔", "中国电信"];
-const categories = ["全部类别", "采购公告", "直接采购公告", "采购意见征求公告", "采购需求公示", "询比公告", "招标公告", "资格预审公告", "采购项目预公告"];
+const categories = ["全部类别", "招采公告", "询比公告", "采购需求", "预公告"];
 const scoringTypes = [
   { value: "keyword", label: "关键词匹配", parameterLabel: "满分命中数", defaultParameter: 3 },
   { value: "budget", label: "预算区间", parameterLabel: "满分预算（万元）", defaultParameter: 1000 },
@@ -36,6 +36,7 @@ export default function Home() {
   const [startDate, setStartDate] = useState(weekAgo);
   const [endDate, setEndDate] = useState(today);
   const [notices, setNotices] = useState([]);
+  const [comparisonNotices, setComparisonNotices] = useState([]);
   const [status, setStatus] = useState("loading");
   const [fetchedAt, setFetchedAt] = useState("");
   const [exporting, setExporting] = useState(false);
@@ -64,15 +65,22 @@ export default function Home() {
     setNotices([]);
     try {
       const params = new URLSearchParams({ startDate, endDate });
-      const response = await fetch(`/api/notices?${params}`, { cache: "no-store" });
+      const previous = previousPeriod(startDate, endDate);
+      const previousParams = new URLSearchParams({ startDate: previous.start, endDate: previous.end });
+      const [response, previousResponse] = await Promise.all([
+        fetch(`/api/notices?${params}`, { cache: "no-store" }),
+        fetch(`/api/notices?${previousParams}`, { cache: "no-store" })
+      ]);
       if (!response.ok) throw new Error("source unavailable");
       const data = await response.json();
+      const previousData = previousResponse.ok ? await previousResponse.json() : { notices: [] };
       const list = (data.notices || []).map((item) => ({
         ...item,
         extractionStatus: item.fieldsReady ? "公告文字已提取" : "等待识别"
       }));
       if (currentRequest !== requestId.current) return;
       setNotices(list);
+      setComparisonNotices(previousData.notices || []);
       setFetchedAt(data.fetchedAt || new Date().toISOString());
       setStatus(list.length ? "live" : "empty");
       void enrichAll(list.filter((item) => !item.fieldsReady), currentRequest);
@@ -416,15 +424,11 @@ export default function Home() {
   const monthNotices = useMemo(() => notices.filter((item) => String(item.date || "").startsWith(today.slice(0, 7))), [notices, today]);
   const highRelevance = useMemo(() => scoredNotices.filter((item) => item.score >= 70).sort((a, b) => b.score - a.score), [scoredNotices]);
   const scoringTotal = scoringCriteria.filter((item) => item.enabled).reduce((sum, item) => sum + Number(item.maxScore || 0), 0);
-  const trendDays = useMemo(() => buildTrend(notices), [notices]);
-  const categoryStats = useMemo(() => buildCategoryStats(notices, focusGroups, focusRules), [notices, focusGroups, focusRules]);
-  const provinceBudgets = useMemo(() => regions.slice(1).map((name) => ({ name, value: notices.filter((item) => item.region === name).reduce((sum, item) => sum + parseBudget(item.budget), 0) })), [notices]);
-  const methodStats = useMemo(() => buildMethodStats(notices), [notices]);
+  const marketTrends = useMemo(() => buildMarketTrends(notices, comparisonNotices, startDate, endDate, focusGroups, focusRules), [notices, comparisonNotices, startDate, endDate, focusGroups, focusRules]);
   const deadlines = useMemo(() => scoredNotices.map((item) => ({ ...item, daysLeft: deadlineDays(item.deadline) })).filter((item) => item.daysLeft >= 0 && item.daysLeft <= 7).sort((a, b) => a.daysLeft - b.daysLeft).slice(0, 5), [scoredNotices]);
   const completeness = useMemo(() => notices.map((item) => fieldCompleteness(item)), [notices]);
   const completeRate = completeness.length ? Math.round(completeness.reduce((sum, item) => sum + item.percent, 0) / completeness.length) : 0;
   const reviewCount = completeness.filter((item) => item.missing.length).length;
-  const fastestCategory = categoryStats.slice().sort((a, b) => b.growth - a.growth)[0];
 
   useEffect(() => { setPage(1); }, [region, operator, category, query, startDate, endDate, pageSize]);
 
@@ -453,16 +457,15 @@ export default function Home() {
             <Kpi label="当月公告数" value={monthNotices.length} note={today.slice(0, 7).replace("-", "年") + "月"} />
             <Kpi label="高相关项目" value={highRelevance.length} note="商机评分 ≥ 70" accent />
           </div>
+          <section className="market-trends">
+            <div className="market-trends-head"><div><h2>市场趋势</h2><p>{startDate} 至 {endDate}，对比上一同长度周期</p></div><span>{marketTrends.granularity === "week" ? "按周统计" : "按日统计"}</span></div>
+            <article className="trend-metric trend-volume"><header><div><span>公告数量趋势</span><strong>{marketTrends.volume.current} 条</strong></div><Change value={marketTrends.volume.change} /></header><div className="bar-chart">{marketTrends.volume.series.map((day) => <div className="bar-col" key={day.date} title={`${day.date}: ${day.count}条`}><i style={{ height: `${Math.max(8, day.height)}%` }} /><small>{day.label}</small></div>)}</div><p>上一周期 {marketTrends.volume.previous} 条</p></article>
+            <article className="trend-metric"><header><div><span>预算趋势</span><strong>{formatCurrency(marketTrends.budget.total)}</strong></div><Change value={marketTrends.budget.change} /></header><dl><div><dt>平均预算</dt><dd>{formatCurrency(marketTrends.budget.average)}</dd></div><div><dt>已识别预算</dt><dd>{marketTrends.budget.recognized} 条</dd></div><div><dt>上期总预算</dt><dd>{formatCurrency(marketTrends.budget.previousTotal)}</dd></div></dl><p>仅统计明确识别预算的公告</p></article>
+            <article className="trend-metric"><header><div><span>热点趋势</span><strong>{marketTrends.hotspots.length} 个分类</strong></div></header><div className="hotspot-list">{marketTrends.hotspots.length ? marketTrends.hotspots.slice(0, 6).map((item) => <div key={item.name}><span>{item.name}</span><b>{item.current}</b><small>上期 {item.previous}</small><Change value={item.change} /></div>) : <EmptyMini text="请先配置重点分类" />}</div><p>按网站重点分类规则统计</p></article>
+          </section>
           <div className="dashboard-grid dashboard-grid-refined">
-            <Panel className="trend-panel compact-panel" title="市场趋势" subtitle="当前查询周期公告量走势"><div className="bar-chart">{trendDays.map((day) => <div className="bar-col" key={day.date} title={`${day.date}: ${day.count}条`}><i style={{ height: `${Math.max(8, day.height)}%` }} /><small>{day.label}</small></div>)}</div><div className="operator-strip">{operators.slice(1).map((name) => <span key={name}><i style={{ background: operatorColor(name) }} />{name} {operatorCounts[name]}</span>)}</div></Panel>
             <Panel title="商机评分 TOP 4" subtitle="按当前评分规则排序" action={<button onClick={() => setActiveView("ranking")}>更多 →</button>}><div className="score-list">{scoredNotices.slice().sort((a,b)=>b.score-a.score).slice(0,4).map((item)=><button key={item.id} onClick={()=>{setQuery(item.title);setActiveView("list")}}><span>{item.title}</span><i><b style={{width:`${item.score}%`}} /></i><strong>{item.score}</strong></button>)}</div></Panel>
-            <Panel className="compact-panel" title="重点分类公告数" subtitle="按自定义大类统计"><MetricBars rows={categoryStats.slice(0,5).map((item)=>({label:item.name,value:item.count}))} /></Panel>
             <Panel title="截止时间临近" subtitle="未来 7 天内到期"><div className="deadline-list">{deadlines.length ? deadlines.map((item)=><a key={item.id} href={item.url} target="_blank" rel="noreferrer"><span><b>{item.title}</b><small>{item.operator} · {item.deadline}</small></span><em>剩 {item.daysLeft} 天</em></a>) : <EmptyMini text="当前无 7 天内到期项目" />}</div></Panel>
-          </div>
-          <div className="insight-grid">
-            <Panel title="各省采购金额趋势" subtitle="仅统计公告明确列示金额"><MetricBars money rows={provinceBudgets.map((item)=>({label:item.name,value:item.value}))} /></Panel>
-            <Panel title="采购方式结构" subtitle="招标、询比与直接采购比例"><div className="ratio-row">{methodStats.map((item)=><div key={item.name}><span>{item.name}</span><strong>{item.percent}%</strong><i><b style={{width:`${item.percent}%`}} /></i></div>)}</div></Panel>
-            <Panel title="业务方向洞察" subtitle="重点分类增长与平均预算"><div className="business-insight"><p>本月增长最快</p><strong>{fastestCategory?.name || "暂无分类数据"}</strong><span>{fastestCategory ? `较前半周期 ${fastestCategory.growth >= 0 ? "+" : ""}${fastestCategory.growth}%` : "请先配置重点分类"}</span>{categoryStats.slice(0,3).map((item)=><small key={item.name}>{item.name} · 平均预算 {formatCurrency(item.avgBudget)}</small>)}</div></Panel>
           </div>
         </section>
       )}
@@ -759,24 +762,57 @@ function scoreNotice(item, rules, criteria = defaultScoringCriteria) {
   return { ...item, score: Math.min(100, score), matchedKeywords, scoreParts };
 }
 
-function buildTrend(notices) {
+function previousPeriod(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
+  const previousEnd = new Date(start.getTime() - 86400000);
+  const previousStart = new Date(previousEnd.getTime() - (days - 1) * 86400000);
+  return { start: previousStart.toISOString().slice(0, 10), end: previousEnd.toISOString().slice(0, 10), days };
+}
+
+function changePercent(current, previous) {
+  if (!previous) return current ? 100 : 0;
+  return Math.round((current - previous) / previous * 100);
+}
+
+function buildTrend(notices, startDate, endDate) {
   const grouped = new Map();
   notices.forEach((item) => item.date && grouped.set(item.date, (grouped.get(item.date) || 0) + 1));
-  const rows = [...grouped].sort(([a], [b]) => a.localeCompare(b));
+  const period = previousPeriod(startDate, endDate);
+  const weekly = period.days > 31;
+  const rows = [];
+  const last = new Date(`${endDate}T00:00:00Z`);
+  for (let cursor = new Date(`${startDate}T00:00:00Z`); cursor <= last; cursor = new Date(cursor.getTime() + (weekly ? 7 : 1) * 86400000)) {
+    const date = cursor.toISOString().slice(0, 10);
+    if (weekly) {
+      const weekEnd = new Date(Math.min(last.getTime(), cursor.getTime() + 6 * 86400000)).toISOString().slice(0, 10);
+      rows.push([date, notices.filter((item) => item.date >= date && item.date <= weekEnd).length]);
+    } else rows.push([date, grouped.get(date) || 0]);
+  }
   const max = Math.max(1, ...rows.map(([, count]) => count));
   return rows.map(([date, count]) => ({ date, count, height: count / max * 88, label: date.slice(5).replace("-", "/") }));
 }
 
-function buildCategoryStats(notices, groups, rules) {
-  const midpoint = notices.map((item) => item.date).filter(Boolean).sort()[Math.floor(notices.length / 2)] || "";
-  return groups.map((group) => {
+function buildMarketTrends(currentNotices, previousNotices, startDate, endDate, groups, rules) {
+  const currentBudgets = currentNotices.map((item) => parseBudget(item.budget)).filter((value) => value > 0);
+  const previousBudgets = previousNotices.map((item) => parseBudget(item.budget)).filter((value) => value > 0);
+  const currentBudgetTotal = currentBudgets.reduce((sum, value) => sum + value, 0);
+  const previousBudgetTotal = previousBudgets.reduce((sum, value) => sum + value, 0);
+  const hotspots = groups.map((group) => {
     const groupRules = rules.filter((rule) => rule.groupId === group.id);
-    const matched = notices.filter((item) => groupRules.some((rule) => (rule.operator === "全部运营商" || rule.operator === item.operator) && rule.keywords.some((word) => `${item.title} ${item.purchaseContent || ""}`.toLowerCase().includes(word.toLowerCase()))));
-    const early = matched.filter((item) => item.date < midpoint).length;
-    const late = matched.filter((item) => item.date >= midpoint).length;
-    const budgets = matched.map((item) => parseBudget(item.budget)).filter(Boolean);
-    return { name: group.name, count: matched.length, growth: early ? Math.round((late - early) / early * 100) : late ? 100 : 0, avgBudget: budgets.length ? budgets.reduce((a, b) => a + b, 0) / budgets.length : 0 };
-  }).sort((a, b) => b.count - a.count);
+    const matches = (item) => groupRules.some((rule) => (rule.operator === "全部运营商" || rule.operator === item.operator) && rule.keywords.some((word) => `${item.title} ${item.purchaseContent || ""}`.toLowerCase().includes(word.toLowerCase())));
+    const current = currentNotices.filter(matches).length;
+    const previous = previousNotices.filter(matches).length;
+    return { name: group.name, current, previous, change: changePercent(current, previous) };
+  }).sort((a, b) => b.current - a.current);
+  const period = previousPeriod(startDate, endDate);
+  return {
+    granularity: period.days > 31 ? "week" : "day",
+    volume: { current: currentNotices.length, previous: previousNotices.length, change: changePercent(currentNotices.length, previousNotices.length), series: buildTrend(currentNotices, startDate, endDate) },
+    budget: { total: currentBudgetTotal, average: currentBudgets.length ? currentBudgetTotal / currentBudgets.length : 0, recognized: currentBudgets.length, previousTotal: previousBudgetTotal, change: changePercent(currentBudgetTotal, previousBudgetTotal) },
+    hotspots
+  };
 }
 
 function buildMethodStats(notices) {
@@ -800,6 +836,11 @@ function paginationNumbers(current, total) {
 
 function Loading() {
   return <div className="skeletons">{[1, 2, 3, 4].map((n) => <div className="skeleton" key={n}><i /><b /><span /></div>)}</div>;
+}
+
+function Change({ value }) {
+  const state = value > 0 ? "up" : value < 0 ? "down" : "flat";
+  return <em className={`trend-change ${state}`}>{value > 0 ? "+" : ""}{value}%</em>;
 }
 
 function Detail({ label, value, wide }) {

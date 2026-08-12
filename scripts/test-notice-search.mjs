@@ -5,6 +5,14 @@ import path from "node:path";
 const workerSource = await fs.readFile("server/index.js", "utf8");
 const workerModule = await import(`data:text/javascript;base64,${Buffer.from(workerSource).toString("base64")}`);
 const worker = workerModule.default;
+const today = new Date().toISOString().slice(0, 10);
+
+function offsetMonth(date, months) {
+  const [year, month, day] = date.split("-").map(Number);
+  const target = new Date(Date.UTC(year, month - 1 - months, 1));
+  const lastDay = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  return `${target.getUTCFullYear()}-${String(target.getUTCMonth() + 1).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+}
 
 const env = {
   ASSETS: {
@@ -58,7 +66,7 @@ assert(allZhejiang.items.every((item) => item.province === "浙江" && item.publ
 const telecomBudget = await search({
   provinces: ["福建"],
   operators: ["电信"],
-  noticeCategories: ["招标公告"],
+  noticeCategories: ["招采公告"],
   budgetMin: 100,
   publishStart: "2026-08-01",
   publishEnd: "2026-08-11",
@@ -79,14 +87,14 @@ assert.equal(natural.success, true);
 assert.deepEqual(natural.appliedFilters.provinces, ["福建"]);
 assert.deepEqual(natural.appliedFilters.operators, []);
 assert(natural.appliedFilters.focusCategories.includes("AI应用"));
-assert.deepEqual(natural.appliedFilters.keywords, []);
+assert.deepEqual(natural.appliedFilters.keywords, ["AI"]);
 
 const explicitRangeResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=2026-08-04%20%E8%87%B3%202026-08-11%E7%A6%8F%E5%BB%BA%E6%89%80%E6%9C%89%E8%BF%90%E8%90%A5%E5%95%86%E7%9A%84AI%E5%85%AC%E5%91%8A&limit=10"), env);
 const explicitRange = await explicitRangeResponse.json();
 assert.equal(explicitRange.success, true);
 assert.equal(explicitRange.appliedFilters.publishStart, "2026-08-04");
 assert.equal(explicitRange.appliedFilters.publishEnd, "2026-08-11");
-assert.deepEqual(explicitRange.appliedFilters.keywords, []);
+assert.deepEqual(explicitRange.appliedFilters.keywords, ["AI"]);
 
 const chineseDateResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=2026%E5%B9%B48%E6%9C%884%E6%97%A5%E7%A6%8F%E5%BB%BA%E7%A7%BB%E5%8A%A8%E5%85%AC%E5%91%8A"), env);
 const chineseDate = await chineseDateResponse.json();
@@ -101,9 +109,9 @@ assert(!strictFocus.items.some((item) => item.title.includes("市场竞争力提
 
 const oneMonthResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E7%9C%81%E4%B8%80%E4%B8%AA%E6%9C%88%E5%86%85%E6%89%80%E6%9C%89%E8%BF%90%E8%90%A5%E5%95%86%E7%9A%84AI%E5%85%AC%E5%91%8A&limit=10"), env);
 const oneMonth = await oneMonthResponse.json();
-assert.equal(oneMonth.appliedFilters.publishStart, "2026-07-11");
-assert.equal(oneMonth.appliedFilters.publishEnd, "2026-08-11");
-assert.deepEqual(oneMonth.appliedFilters.keywords, []);
+assert.equal(oneMonth.appliedFilters.publishStart, offsetMonth(today, 1));
+assert.equal(oneMonth.appliedFilters.publishEnd, today);
+assert.deepEqual(oneMonth.appliedFilters.keywords, ["AI"]);
 
 const monthDayResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E6%B5%99%E6%B1%9F%E7%A7%BB%E5%8A%A88%E6%9C%887%E6%97%A5%E5%8F%91%E5%B8%83%E7%9A%84%E9%87%87%E8%B4%AD%E5%85%AC%E5%91%8A"), env);
 const monthDay = await monthDayResponse.json();
@@ -113,9 +121,35 @@ assert.deepEqual(monthDay.appliedFilters.keywords, []);
 
 const eightMonthsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA8%E4%B8%AA%E6%9C%88%E5%86%85AI%E5%85%AC%E5%91%8A"), env);
 const eightMonths = await eightMonthsResponse.json();
-assert.equal(eightMonths.appliedFilters.publishStart, "2025-12-11");
-assert.equal(eightMonths.appliedFilters.publishEnd, "2026-08-11");
-assert.deepEqual(eightMonths.appliedFilters.keywords, []);
+assert.equal(eightMonths.appliedFilters.publishStart, offsetMonth(today, 8));
+assert.equal(eightMonths.appliedFilters.publishEnd, today);
+assert.deepEqual(eightMonths.appliedFilters.keywords, ["AI"]);
+
+const powerTenderResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E7%A7%BB%E5%8A%A8%E4%B8%80%E4%B8%AA%E6%9C%88%E5%86%85%E7%9A%84%E5%85%B3%E4%BA%8E%E7%94%B5%E6%BA%90%E6%8B%9B%E6%A0%87%E9%87%87%E8%B4%AD%E9%A1%B9%E7%9B%AE"), env);
+const powerTender = await powerTenderResponse.json();
+assert.deepEqual(powerTender.appliedFilters.provinces, ["福建"]);
+assert.deepEqual(powerTender.appliedFilters.operators, ["中国移动"]);
+assert.deepEqual(powerTender.appliedFilters.noticeCategories, ["招采公告"]);
+assert.deepEqual(powerTender.appliedFilters.keywords, ["电源"]);
+
+const classifiedKeywordsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E7%A7%BB%E5%8A%A8%E4%B8%80%E4%B8%AA%E6%9C%88%E5%86%85%E7%9A%84%E5%85%B3%E4%BA%8E%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83%E5%92%8C%E5%85%89%E4%BC%8F%E6%8B%9B%E6%A0%87%E9%87%87%E8%B4%AD%E9%A1%B9%E7%9B%AE"), env);
+const classifiedKeywords = await classifiedKeywordsResponse.json();
+assert.deepEqual(classifiedKeywords.appliedFilters.keywords.sort(), ["数据中心", "光伏"].sort());
+
+const halfYearSmartAppsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E8%BF%90%E8%90%A5%E5%95%86%E5%8D%8A%E5%B9%B4%E6%99%BA%E6%85%A7%E5%BA%94%E7%94%A8%E5%85%AC%E5%91%8A"), env);
+const halfYearSmartApps = await halfYearSmartAppsResponse.json();
+assert.deepEqual(halfYearSmartApps.appliedFilters.provinces, ["福建"]);
+assert.deepEqual(halfYearSmartApps.appliedFilters.operators, []);
+assert.deepEqual(halfYearSmartApps.appliedFilters.focusCategories, ["智慧应用"]);
+assert.deepEqual(halfYearSmartApps.appliedFilters.keywords, []);
+assert.equal(halfYearSmartApps.appliedFilters.publishStart, offsetMonth(today, 6));
+assert.equal(halfYearSmartApps.appliedFilters.publishEnd, today);
+
+const retryHalfYearSmartAppsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E9%87%8D%E6%96%B0%E6%9F%A5%E8%AF%A2%E7%A6%8F%E5%BB%BA%E8%BF%90%E8%90%A5%E5%95%86%E5%8D%8A%E5%B9%B4%E6%99%BA%E6%85%A7%E5%BA%94%E7%94%A8%E5%85%AC%E5%91%8A"), env);
+const retryHalfYearSmartApps = await retryHalfYearSmartAppsResponse.json();
+assert.deepEqual(retryHalfYearSmartApps.appliedFilters.focusCategories, ["智慧应用"]);
+assert.deepEqual(retryHalfYearSmartApps.appliedFilters.keywords, []);
+assert.equal(retryHalfYearSmartApps.total, halfYearSmartApps.total);
 
 console.log(JSON.stringify({
   options: { provinces: options.provinces.length, operators: options.operators.length, focusGroups: options.focusGroups.length },

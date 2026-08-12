@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractDeadline as extractUnifiedDeadline, textAttachmentsFromDetail } from "./lib/deadline-extractor.mjs";
 
 const OUTPUT = path.resolve("public/data/telecom-notices.json");
 const LIST_API = "https://caigou.chinatelecom.com.cn/portal/base/announcementJoin/queryListNew";
@@ -10,7 +11,7 @@ const PROVINCES = [
   { code: "22", name: "福建" }
 ];
 const KEEP_DAYS = Number(process.env.TELECOM_KEEP_DAYS || 365);
-const EXTRACTOR_VERSION = 10;
+const EXTRACTOR_VERSION = 11;
 const NOTICE_TYPES = [{ type: "xi9s", category: "资格预审公告" }, { type: "e2no", category: "招标公告" }, { type: "e3erht", category: "询比公告" }];
 
 const existing = await readArchive();
@@ -110,6 +111,11 @@ function toNotice(summary, detail, region) {
     : "";
   const html = detail.context || packageHtml;
   const blocks = htmlBlocks(html);
+  const deadlineFields = extractUnifiedDeadline({
+    structuredValues: structuredDeadlineValues(detail),
+    html,
+    attachmentTexts: textAttachmentsFromDetail(detail)
+  });
   return sanitizeNotice({
     ...summaryToBase(summary, region),
     title: detail.tenderAnnouncementName || summary.docTitle || "未命名采购公告",
@@ -117,12 +123,18 @@ function toNotice(summary, detail, region) {
     purchaseContent: extractPurchaseContent(html, blocks),
     budget: extractBudget(blocks),
     saleTime: formatDateRange(detail.sellDateFrom, detail.sellDateTo) || extractTime(blocks, "sale"),
-    deadline: extractDeadline(html, blocks),
+    ...deadlineFields,
     qualification: extractQualification(blocks),
     performance: extractPerformance(blocks),
     fieldsReady: true,
     extractorVersion: EXTRACTOR_VERSION
   });
+}
+
+function structuredDeadlineValues(detail) {
+  return ["replyEndTime", "responseEndTime", "bidEndTime", "tenderEndTime", "deadline"]
+    .map((key) => detail?.[key] ? { value: detail[key], source: `详情接口.${key}` } : null)
+    .filter(Boolean);
 }
 
 function extractDeadline(html, blocks) {

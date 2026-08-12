@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractDeadline as extractUnifiedDeadline, textAttachmentsFromDetail } from "./lib/deadline-extractor.mjs";
 
 const OUTPUT = path.resolve("public/data/tower-notices.json");
 const API = "http://www.tower.com.cn/supportal/v1";
@@ -9,7 +10,7 @@ const PROVINCES = [
   { code: "350000", name: "福建" }
 ];
 const KEEP_DAYS = Number(process.env.TOWER_KEEP_DAYS || 365);
-const EXTRACTOR_VERSION = 10;
+const EXTRACTOR_VERSION = 11;
 const NOTICE_CATEGORIES = [{ category: "采购公告", body: { purchaseNoticeType: "2", excludeNoticeType: "49" } }, { category: "采购项目预公告", body: { purchaseNoticeType: "2", noticeType: "49" } }];
 
 const existing = await readArchive();
@@ -91,17 +92,28 @@ function isArchivedProcurement(item) {
 function toNotice(summary, detail, region) {
   const html = detail.noticeContent || "";
   const blocks = htmlBlocks(html);
+  const deadlineFields = extractUnifiedDeadline({
+    structuredValues: structuredDeadlineValues(detail),
+    html,
+    attachmentTexts: textAttachmentsFromDetail(detail)
+  });
   return sanitizeNotice({
     ...summaryToBase({ ...summary, ...detail }, region),
     purchaseContent: extractPurchaseContent(html, blocks),
     budget: extractBudget(blocks),
     saleTime: extractTowerTime(blocks, "sale"),
-    deadline: extractTowerTime(blocks, "deadline"),
+    ...deadlineFields,
     qualification: extractQualification(blocks),
     performance: extractPerformance(blocks),
     fieldsReady: true,
     extractorVersion: EXTRACTOR_VERSION
   });
+}
+
+function structuredDeadlineValues(detail) {
+  return ["replyEndTime", "responseEndTime", "bidEndTime", "tenderEndTime", "deadline"]
+    .map((key) => detail?.[key] ? { value: detail[key], source: `详情接口.${key}` } : null)
+    .filter(Boolean);
 }
 
 function summaryToBase(item, region) {
