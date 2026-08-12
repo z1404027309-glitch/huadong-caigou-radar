@@ -298,11 +298,13 @@ async function searchNotices(request, url, env) {
     .filter((item) => matchesStructuredNoticeSearch(item, filters, focusRules))
     .sort((a, b) => compareNotices(a, b, filters.sort));
   const items = matched.slice(0, filters.limit).map(toPublicNoticeItem);
+  const summary = buildNoticeSearchSummary(matched);
 
   return json({
     success: true,
     total: matched.length,
     returned: items.length,
+    summary,
     appliedFilters: filters,
     items,
     ...(errors.length ? { sourceErrors: errors } : {})
@@ -346,9 +348,10 @@ function parseNaturalNoticeQuery(query, focusRules) {
   keywordText = keywordText.replace(/\d{1,2}月\d{1,2}日/g, " ");
   keywordText = keywordText.replace(/(?:近|最近|过去|前)?\s*(?:\d+|[一二两三四五六七八九十百]+)\s*个?月(?:之?内|以内|来)?/g, " ");
   keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
+  const genericQueryWords = new Set(["信息", "资讯", "内容", "情况", "详情", "结果", "清单", "名单"]);
   const extractedKeywords = keywordText.split(/[\s,，;；、的]+/)
     .map((value) => value.trim().replace(/^(?:关于|有关|相关)/, "").replace(/(?:相关|方面)$/u, ""))
-    .filter((value) => value.length >= 2);
+    .filter((value) => value.length >= 2 && !genericQueryWords.has(value));
   const keywords = focusCategories.length ? [] : matchedFocusKeywords.length ? matchedFocusKeywords : extractedKeywords;
 
   return { provinces, operators, noticeCategories, focusCategories, keywords, publishStart, publishEnd, limit: 10 };
@@ -544,6 +547,23 @@ function matchesStructuredNoticeSearch(item, filters, focusRules) {
 
 function noticeSearchHaystack(item) {
   return normalizeSearchText([item.title, item.purchaseContent, item.category, item.noticeType, item.projectNo, item.qualification, item.performance].filter(Boolean).join(" "));
+}
+
+function buildNoticeSearchSummary(items) {
+  const byProvince = Object.fromEntries(SUPPORTED_PROVINCES.map((province) => [province, 0]));
+  const byOperator = Object.fromEntries(SUPPORTED_OPERATORS.map((operator) => [operator, 0]));
+  const byCategory = Object.fromEntries(SUPPORTED_NOTICE_CATEGORIES.map((category) => [category, 0]));
+
+  for (const item of items) {
+    const province = String(item.region || item.province || "");
+    const operator = String(item.operator || "");
+    const category = String(item.category || "");
+    if (Object.hasOwn(byProvince, province)) byProvince[province] += 1;
+    if (Object.hasOwn(byOperator, operator)) byOperator[operator] += 1;
+    if (Object.hasOwn(byCategory, category)) byCategory[category] += 1;
+  }
+
+  return { byProvince, byOperator, byCategory };
 }
 
 function parseBudgetWan(value) {

@@ -172,6 +172,15 @@ assert.deepEqual(digitalGovernment.appliedFilters.focusCategories, ["数字政�
 assert.deepEqual(digitalGovernment.appliedFilters.keywords, []);
 assert(digitalGovernment.items.some((item) => item.title.includes("电子政务")));
 
+const tenderInfoResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("今天福建运营商招标信息")}&limit=10`), env);
+const tenderInfo = await tenderInfoResponse.json();
+assert.deepEqual(tenderInfo.appliedFilters.provinces, ["福建"]);
+assert.deepEqual(tenderInfo.appliedFilters.noticeCategories, ["招采公告"]);
+assert.deepEqual(tenderInfo.appliedFilters.keywords, []);
+assert.equal(Object.values(tenderInfo.summary.byProvince).reduce((sum, count) => sum + count, 0), tenderInfo.total);
+assert.equal(Object.values(tenderInfo.summary.byOperator).reduce((sum, count) => sum + count, 0), tenderInfo.total);
+assert.equal(Object.values(tenderInfo.summary.byCategory).reduce((sum, count) => sum + count, 0), tenderInfo.total);
+
 console.log(JSON.stringify({
   options: { provinces: options.provinces.length, operators: options.operators.length, focusGroups: options.focusGroups.length },
   searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total, strictFocus: strictFocus.total, oneMonth: oneMonth.total, monthDay: monthDay.total, eightMonths: eightMonths.total }
