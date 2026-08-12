@@ -348,7 +348,7 @@ function parseNaturalNoticeQuery(query, focusRules) {
   keywordText = keywordText.replace(/\d{1,2}月\d{1,2}日/g, " ");
   keywordText = keywordText.replace(/(?:近|最近|过去|前)?\s*(?:\d+|[一二两三四五六七八九十百]+)\s*个?月(?:之?内|以内|来)?/g, " ");
   keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
-  const genericQueryWords = new Set(["信息", "资讯", "内容", "情况", "详情", "结果", "清单", "名单"]);
+  const genericQueryWords = new Set(["信息", "资讯", "内容", "情况", "详情", "结果", "清单", "名单", "简报", "汇总", "总览", "摘要"]);
   const extractedKeywords = keywordText.split(/[\s,，;；、的]+/)
     .map((value) => value.trim().replace(/^(?:关于|有关|相关)/, "").replace(/(?:相关|方面)$/u, ""))
     .filter((value) => value.length >= 2 && !genericQueryWords.has(value));
