@@ -145,7 +145,7 @@ const inquiryResponse = await worker.fetch(new Request("https://local.test/api/n
 const inquiry = await inquiryResponse.json();
 assert.deepEqual(inquiry.appliedFilters.noticeCategories, ["招采公告"]);
 assert.deepEqual(inquiry.appliedFilters.sourceCategories, ["询比公告"]);
-assert(inquiry.items.every((item) => item.category === "招采公告" && item.sourceCategory === "询比公告"));
+assert(inquiry.items.every((item) => item.category === "招采公告" && item.detailCategory === "询比公告"));
 
 const classifiedKeywordsResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E7%A7%BB%E5%8A%A8%E4%B8%80%E4%B8%AA%E6%9C%88%E5%86%85%E7%9A%84%E5%85%B3%E4%BA%8E%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83%E5%92%8C%E5%85%89%E4%BC%8F%E6%8B%9B%E6%A0%87%E9%87%87%E8%B4%AD%E9%A1%B9%E7%9B%AE"), env);
 const classifiedKeywords = await classifiedKeywordsResponse.json();
@@ -260,6 +260,23 @@ const broadTenderProcurement = await broadTenderProcurementResponse.json();
 assert.deepEqual(broadTenderProcurement.appliedFilters.noticeCategories, ["招采公告"]);
 assert.deepEqual(broadTenderProcurement.appliedFilters.sourceCategories, []);
 
+for (const naturalPhrase of [
+  "福建移动8月14日全天招采信息",
+  "福建移动8月14日招标采购信息",
+  "福建移动8月14日采购招标资讯",
+  "福建移动8月14日招投标信息"
+]) {
+  const response = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent(naturalPhrase)}&limit=50`), env);
+  const result = await response.json();
+  assert.deepEqual(result.appliedFilters.provinces, ["福建"], naturalPhrase);
+  assert.deepEqual(result.appliedFilters.operators, ["中国移动"], naturalPhrase);
+  assert.deepEqual(result.appliedFilters.noticeCategories, ["招采公告"], naturalPhrase);
+  assert.deepEqual(result.appliedFilters.sourceCategories, [], naturalPhrase);
+  assert.deepEqual(result.appliedFilters.keywords, [], naturalPhrase);
+  assert.equal(result.appliedFilters.publishStart, "2026-08-14", naturalPhrase);
+  assert.equal(result.appliedFilters.publishEnd, "2026-08-14", naturalPhrase);
+}
+
 const provinceBranchFixture = {
   notices: [
     { id: "branch-1", title: "浙江省分公司直接采购需求公示", operator: "中国联通", region: "浙江省分公司", date: today, category: "采购需求公示", url: "https://example.test/branch-1" }
@@ -298,8 +315,25 @@ for (const [queryCategory, expectedCategory, expectedSources] of categoryMatrix)
   assert.deepEqual(result.appliedFilters.keywords, [], queryCategory);
   assert(result.items.every((item) => item.category === expectedCategory), `${queryCategory}: mixed total category`);
   if (expectedSources.length) {
-    assert(result.items.every((item) => expectedSources.includes(item.sourceCategory)), `${queryCategory}: mixed source category`);
+    assert(result.items.every((item) => expectedSources.includes(item.sourceCategory) || expectedSources.includes(item.detailCategory)), `${queryCategory}: mixed fine category`);
   }
+}
+
+const mobileProcurementFixture = {
+  notices: [
+    { id: "mobile-fj-1", title: "中国移动通信集团福建有限公司南平分公司2026年至2028年云客服小微DICT服务采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "采购公告", url: "https://example.test/mobile-fj-1" },
+    { id: "mobile-fj-2", title: "中国移动通信集团福建有限公司厦门分公司2026年中国移动手机动漫基地二期工程施工招标代理服务采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "采购公告", url: "https://example.test/mobile-fj-2" },
+    { id: "mobile-fj-3", title: "中国移动通信集团福建有限公司2026年采购物流精益管理支撑系统开发研发采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "采购公告", url: "https://example.test/mobile-fj-3" },
+    { id: "mobile-fj-4", title: "中国移动通信集团福建有限公司2026年至2027年内容洞察与精准营销定制软件开发研发采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "采购公告", url: "https://example.test/mobile-fj-4" }
+  ]
+};
+const mobileProcurementEnv = { ...env, ASSETS: { fetch: async () => new Response(JSON.stringify(mobileProcurementFixture), { headers: { "content-type": "application/json" } }) } };
+
+for (const queryCategory of ["采购公告", "询比公告", "招采公告", "招标采购公告"]) {
+  const response = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent(`福建移动2026年8月17日${queryCategory}`)}&limit=50`), mobileProcurementEnv);
+  const result = await response.json();
+  assert.equal(result.total, 16, queryCategory);
+  assert(result.items.every((item) => item.sourceCategory === "采购公告" && item.detailCategory === "询比公告"), queryCategory);
 }
 
 console.log(JSON.stringify({

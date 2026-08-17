@@ -314,9 +314,9 @@ function parseNaturalNoticeQuery(query, focusRules) {
   const today = new Date().toISOString().slice(0, 10);
   const provinces = /三省/.test(query) ? [...SUPPORTED_PROVINCES] : SUPPORTED_PROVINCES.filter((province) => query.includes(province));
   const operators = SUPPORTED_OPERATORS.filter((operator) => query.includes(operator) || query.includes(operator.replace("中国", "")));
-  const broadProcurementQuery = /招采公告|招标采购公告/.test(query);
+  const broadProcurementQuery = /招采(?:公告|信息|资讯)|招标采购(?:公告|信息|资讯)|采购招标(?:公告|信息|资讯)|招投标(?:公告|信息|资讯)/.test(query);
   const noticeCategoryAliases = [
-    ["招采公告", /招采公告|招标采购公告|招标|采购公告|直接采购|单一来源|询比|询价|比选/],
+    ["招采公告", /招采(?:公告|信息|资讯)|招标采购(?:公告|信息|资讯)|采购招标(?:公告|信息|资讯)|招投标(?:公告|信息|资讯)|招标|采购公告|直接采购|单一来源|询比|询价|比选/],
     ["采购需求", /采购需求|意见征求|征求意见|需求公示/],
     ["预公告", /预公告|资格预审/]
   ];
@@ -357,10 +357,11 @@ function parseNaturalNoticeQuery(query, focusRules) {
     ...SUPPORTED_OPERATORS.flatMap((value) => [value, value.replace("中国", "")]),
     ...SUPPORTED_NOTICE_CATEGORIES,
     ...Object.values(NOTICE_CATEGORY_GROUPS).flat(),
+    "招采信息", "招采资讯", "招标采购信息", "招标采购资讯", "采购招标公告", "采购招标信息", "采购招标资讯", "招投标信息", "招投标资讯",
     "直接采购", "单一来源", "意见征求", "征求意见", "需求公示", "询比", "询价", "比选", "招标", "资格预审", "项目预公告", "采购预公告",
     ...focusRules.flatMap((rule) => [rule.name, rule.groupName, ...rule.keywords]),
     "按预算排序", "按金额排序", "按截止时间排序", "按截止日期排序", "按发布时间排序", "按发布日期排序", "从高到低", "从低到高", "从早到晚", "从晚到早", "降序", "升序", "三省", "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "发布", "查询", "搜索", "查找", "查一下", "帮我查", "看看", "重新查询", "重新搜索", "重新查找", "重新查", "再查询", "再搜索", "再查一次", "重查", "关于", "有关", "相关", "方面", "一批",
-    "今天", "今日", "本日", "昨天", "昨日", "前天", "前日", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周", "一个月内", "近一个月", "最近一个月", "半年", "半年内", "近半年", "最近半年"
+    "今天", "今日", "本日", "昨天", "昨日", "前天", "前日", "全天", "当日", "整天", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周", "一个月内", "近一个月", "最近一个月", "半年", "半年内", "近半年", "最近半年"
   ].sort((a, b) => b.length - a.length);
   for (const value of removable) keywordText = keywordText.replaceAll(value, " ");
   keywordText = keywordText.replace(/20\d{2}(?:年|[-/.])\d{1,2}(?:月|[-/.])\d{1,2}日?/g, " ");
@@ -557,7 +558,9 @@ function matchesStructuredNoticeSearch(item, filters, focusRules) {
   if (filters.provinces.length && !filters.provinces.includes(province)) return false;
   if (filters.operators.length && !filters.operators.includes(String(item.operator || ""))) return false;
   if (filters.noticeCategories.length && !filters.noticeCategories.includes(String(item.category || ""))) return false;
-  if (filters.sourceCategories.length && !filters.sourceCategories.includes(String(item.sourceCategory || ""))) return false;
+  if (filters.sourceCategories.length && !filters.sourceCategories.some((category) =>
+    category === String(item.sourceCategory || "") || category === String(item.detailCategory || "")
+  )) return false;
 
   const deadline = firstDate(item.deadline || item.responseDeadline || item.bidDeadline);
   if (filters.deadlineStart && (!deadline || deadline < filters.deadlineStart)) return false;
@@ -581,7 +584,7 @@ function matchesStructuredNoticeSearch(item, filters, focusRules) {
 }
 
 function noticeSearchHaystack(item) {
-  return normalizeSearchText([item.title, item.purchaseContent, item.category, item.noticeType, item.projectNo, item.qualification, item.performance].filter(Boolean).join(" "));
+  return normalizeSearchText([item.title, item.purchaseContent, item.category, item.sourceCategory, item.detailCategory, item.noticeType, item.projectNo, item.qualification, item.performance].filter(Boolean).join(" "));
 }
 
 function buildNoticeSearchSummary(items) {
@@ -854,6 +857,7 @@ function toPublicNoticeItem(item) {
     budget: String(item.budget || ""),
     category: String(item.category || ""),
     sourceCategory: String(item.sourceCategory || ""),
+    detailCategory: String(item.detailCategory || ""),
     url: String(item.url || "")
   };
 }
@@ -870,16 +874,16 @@ function firstDate(value) {
 function normalizeCategory(item) {
   const title = item.title || "";
   let sourceCategory = item.sourceCategory || item.category || "采购公告";
-  const titleCategory = inferTitleCategory(title);
-  if (titleCategory) {
-    sourceCategory = titleCategory;
-  } else if (!item.category) {
+  if (!item.sourceCategory && !item.category) {
     if (item.operator === "中国联通") sourceCategory = /采购需求/.test(title) ? "采购需求公示" : /招标/.test(title) ? "招标公告" : "询比公告";
     if (item.operator === "中国电信") sourceCategory = /资格预审/.test(title) ? "资格预审公告" : /招标/.test(title) ? "招标公告" : "询比公告";
     if (item.operator === "中国铁塔") sourceCategory = String(item.noticeType) === "49" || /预公告|采购计划发布/.test(title) ? "采购项目预公告" : "采购公告";
   }
-  const category = Object.entries(NOTICE_CATEGORY_GROUPS).find(([, values]) => values.includes(sourceCategory))?.[0] || "招采公告";
-  return { ...item, region: normalizeProvince(item.region || item.province), sourceCategory, category };
+  const detailCategory = item.detailCategory || inferTitleCategory(title) || sourceCategory;
+  const category = Object.entries(NOTICE_CATEGORY_GROUPS).find(([, values]) =>
+    values.includes(sourceCategory) || values.includes(detailCategory)
+  )?.[0] || "招采公告";
+  return { ...item, region: normalizeProvince(item.region || item.province), sourceCategory, detailCategory, category };
 }
 
 function inferTitleCategory(title) {
