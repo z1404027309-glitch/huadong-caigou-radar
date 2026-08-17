@@ -47,7 +47,13 @@ jobs:
       - name: Collect China Mobile
         id: mobile
         continue-on-error: true
-        run: npm run collect:mobile
+        run: |
+          for ATTEMPT in 1 2 3; do
+            echo "China Mobile collector attempt ${ATTEMPT}/3"
+            npm run collect:mobile && exit 0
+            [ "$ATTEMPT" = "3" ] && exit 1
+            sleep $((ATTEMPT * 20))
+          done
       - name: Collect China Unicom
         id: unicom
         continue-on-error: true

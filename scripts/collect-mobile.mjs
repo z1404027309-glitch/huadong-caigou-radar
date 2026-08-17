@@ -13,6 +13,7 @@ const CATEGORIES = [
   { category: "采购意见征求公告", publishType: "PURCHASE_SERVICE", publishOneType: "PURCHASE_OPINION" }
 ];
 const legacyAgent = new https.Agent({ secureOptions: cryptoConstants.SSL_OP_LEGACY_SERVER_CONNECT });
+const REQUEST_RETRIES = Number(process.env.MOBILE_REQUEST_RETRIES || 6);
 
 const existing = await readArchive();
 const endDate = new Date().toISOString().slice(0, 10);
@@ -82,13 +83,30 @@ async function fetchList(current, config) {
   };
 }
 
-function postJson(url, headers, body) {
+async function postJson(url, headers, body) {
+  let lastError;
+  for (let attempt = 1; attempt <= REQUEST_RETRIES; attempt++) {
+    try {
+      return await postJsonOnce(url, headers, body);
+    } catch (error) {
+      lastError = error;
+      if (attempt === REQUEST_RETRIES) break;
+      const delay = Math.min(15000, 1500 * 2 ** (attempt - 1));
+      console.warn(`mobile request failed (${attempt}/${REQUEST_RETRIES}): ${error.message}; retrying in ${delay}ms`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+  throw lastError;
+}
+
+function postJsonOnce(url, headers, body) {
   const data = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const request = https.request(url, {
       method: "POST",
       headers: { ...headers, "content-length": Buffer.byteLength(data) },
-      agent: legacyAgent
+      agent: legacyAgent,
+      family: 4
     }, (response) => {
       const chunks = [];
       response.on("data", (chunk) => chunks.push(chunk));
