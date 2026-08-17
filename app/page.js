@@ -6,7 +6,7 @@ const SOURCE = "https://b2b.10086.cn/b2b/main/listVendorNotice.html?noticeType=2
 const regions = ["全部", "浙江", "江西", "福建"];
 const colors = { 浙江: "#0f766e", 江西: "#b45309", 福建: "#2563eb" };
 const operators = ["全部运营商", "中国移动", "中国联通", "中国铁塔", "中国电信"];
-const categories = ["全部类别", "招采公告", "询比公告", "采购需求", "预公告"];
+const categories = ["全部类别", "招采公告", "采购需求", "预公告"];
 const scoringTypes = [
   { value: "keyword", label: "关键词匹配", parameterLabel: "满分命中数", defaultParameter: 3 },
   { value: "budget", label: "预算区间", parameterLabel: "满分预算（万元）", defaultParameter: 1000 },
