@@ -3,7 +3,7 @@ import path from "node:path";
 import https from "node:https";
 import { constants as cryptoConstants } from "node:crypto";
 
-const OUTPUT = path.resolve("public/data/mobile-notices.json");
+const OUTPUT = path.resolve(process.env.MOBILE_OUTPUT || "public/data/mobile-notices.json");
 const LIST_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryList";
 const REGIONS = ["浙江", "江西", "福建"];
 const KEEP_DAYS = Number(process.env.MOBILE_KEEP_DAYS || 365);
@@ -21,8 +21,9 @@ const collected = [];
 
 for (const config of CATEGORIES) {
   let reachedStart = false;
-  for (let current = 1; current <= 20 && !reachedStart; current++) {
-    const records = await fetchList(current, startDate, endDate, config);
+  for (let current = 1; current <= 1000 && !reachedStart; current++) {
+    const page = await fetchList(current, config);
+    const records = page.records;
     if (!records.length) break;
     for (const item of records) {
       const date = String(item.publishDate || "").slice(0, 10);
@@ -33,7 +34,7 @@ for (const config of CATEGORIES) {
       const notice = toNotice({ ...item, category: config.category });
       if (notice && (!notice.date || notice.date <= endDate)) collected.push(notice);
     }
-    if (records.length < 100) break;
+    if (page.last || (page.totalPages > 0 && current >= page.totalPages)) break;
   }
 }
 
@@ -51,7 +52,7 @@ await fs.writeFile(OUTPUT, `${JSON.stringify({
 }, null, 2)}\n`, "utf8");
 console.log(`saved ${notices.length} notices to ${OUTPUT}`);
 
-async function fetchList(current, creationDateStart, creationDateEnd, config) {
+async function fetchList(current, config) {
   const payload = await postJson(LIST_API, {
       accept: "application/json, text/plain, */*",
       "content-type": "application/json",
@@ -67,13 +68,18 @@ async function fetchList(current, creationDateStart, creationDateEnd, config) {
       publishOneTypes: [config.publishOneType],
       purchaseType: "",
       companyType: "",
-      creationDateStart,
-      creationDateEnd,
       size: 100,
       current,
       sfactApplColumn5: "PC"
     });
-  return payload?.data?.content || payload?.data?.records || [];
+  const data = payload?.data;
+  const records = data?.content || data?.records || data?.items ||
+    payload?.content || payload?.records || payload?.items || [];
+  return {
+    records: Array.isArray(records) ? records : [],
+    last: Boolean(data?.last ?? payload?.last),
+    totalPages: Number(data?.totalPages ?? payload?.totalPages ?? 0)
+  };
 }
 
 function postJson(url, headers, body) {
