@@ -874,6 +874,13 @@ function firstDate(value) {
 function normalizeCategory(item) {
   const title = item.title || "";
   let sourceCategory = item.sourceCategory || item.category || "采购公告";
+  if (item.operator === "中国移动") {
+    const publishType = String(item.publishType || "");
+    const publishOneType = String(item.publishOneType || "");
+    if (publishOneType === "ONE_SOURCE_PROCUREMENT") sourceCategory = "直接采购公告";
+    else if (publishType === "PURCHASE_SERVICE" || publishOneType === "PURCHASE_OPINION") sourceCategory = "采购意见征求公告";
+    else if (publishType === "PROCUREMENT" || publishOneType === "PROCUREMENT") sourceCategory = "采购公告";
+  }
   if (!item.sourceCategory && !item.category) {
     if (item.operator === "中国联通") sourceCategory = /采购需求/.test(title) ? "采购需求公示" : /招标/.test(title) ? "招标公告" : "询比公告";
     if (item.operator === "中国电信") sourceCategory = /资格预审/.test(title) ? "资格预审公告" : /招标/.test(title) ? "招标公告" : "询比公告";

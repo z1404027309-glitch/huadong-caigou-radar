@@ -321,7 +321,7 @@ for (const [queryCategory, expectedCategory, expectedSources] of categoryMatrix)
 
 const mobileProcurementFixture = {
   notices: [
-    { id: "mobile-fj-1", title: "中国移动通信集团福建有限公司南平分公司2026年至2028年云客服小微DICT服务采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "采购公告", url: "https://example.test/mobile-fj-1" },
+    { id: "mobile-fj-1", title: "中国移动通信集团福建有限公司南平分公司2026年至2028年云客服小微DICT服务采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "询比公告", publishType: "PROCUREMENT", publishOneType: "PROCUREMENT", url: "https://example.test/mobile-fj-1" },
     { id: "mobile-fj-2", title: "中国移动通信集团福建有限公司厦门分公司2026年中国移动手机动漫基地二期工程施工招标代理服务采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "采购公告", url: "https://example.test/mobile-fj-2" },
     { id: "mobile-fj-3", title: "中国移动通信集团福建有限公司2026年采购物流精益管理支撑系统开发研发采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "采购公告", url: "https://example.test/mobile-fj-3" },
     { id: "mobile-fj-4", title: "中国移动通信集团福建有限公司2026年至2027年内容洞察与精准营销定制软件开发研发采购项目_询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "采购公告", url: "https://example.test/mobile-fj-4" }
