@@ -1,6 +1,8 @@
 import { chromium } from "playwright";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractDeadline as extractUnifiedDeadline, textAttachmentsFromDetail } from "./lib/deadline-extractor.mjs";
+import { extractCommonNoticeFields, preferRecognized } from "./lib/notice-field-extractor.mjs";
 
 const OUTPUT = path.resolve("public/data/unicom-notices.json");
 const PROVINCES = [
@@ -10,7 +12,7 @@ const PROVINCES = [
 ];
 const ANNO_TYPES = ["022001", "022002", "022003"];
 const KEEP_DAYS = Number(process.env.UNICOM_KEEP_DAYS || 365);
-const EXTRACTOR_VERSION = 8;
+const EXTRACTOR_VERSION = 12;
 const CATEGORY_NAMES = { "022001": "采购需求公示", "022002": "招标公告", "022003": "询比公告" };
 
 const browser = await chromium.launch({
@@ -181,16 +183,22 @@ function summaryToBase(item) {
 function extractFields(html, summary) {
   const blocks = htmlBlocks(html);
   const text = blocks.join("\n");
+  const attachmentTexts = textAttachmentsFromDetail(summary);
+  const commonFields = extractCommonNoticeFields({ html, attachmentTexts });
+  const deadlineFields = extractUnifiedDeadline({
+    structuredValues: summary.replyEndTime ? [{ value: summary.replyEndTime, source: "详情接口.replyEndTime" }] : [],
+    html,
+    attachmentTexts
+  });
   return {
-    purchaseContent: extractPurchaseContent(html, blocks),
-    budget: extractBudget(text),
-    saleTime: formatRange(summary.annoStartDate, summary.tenderEndDate)
-      || extractTimeRange(text, /(?:采购|询比|招标)文件(?:获取|售卖|发售)/),
-    deadline: formatDateTime(summary.replyEndTime)
-      || extractTimeRange(text, /(?:(?:应答|响应|投标)文件(?:递交|提交)?截止|(?:应答|响应|投标)截止)/),
-    qualification: extractOneParagraph(blocks, /应答人(?:基本)?资格|供应商资格|投标人资格/),
-    performance: extractOneParagraph(blocks, /业绩要求|业绩资格|同类项目业绩/)
-      || "公告资格条款中未单列业绩要求"
+    purchaseContent: preferRecognized(extractPurchaseContent(html, blocks), commonFields.purchaseContent),
+    budget: preferRecognized(extractBudget(text), commonFields.budget),
+    saleTime: preferRecognized(formatRange(summary.annoStartDate, summary.tenderEndDate)
+      || extractTimeRange(text, /(?:采购|询比|招标)文件(?:获取|售卖|发售)/), commonFields.saleTime),
+    ...deadlineFields,
+    qualification: preferRecognized(extractOneParagraph(blocks, /应答人(?:基本)?资格|供应商资格|投标人资格/), commonFields.qualification),
+    performance: preferRecognized(extractOneParagraph(blocks, /业绩要求|业绩资格|同类项目业绩/), commonFields.performance,
+      "公告资格条款中未单列业绩要求")
   };
 }
 

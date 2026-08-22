@@ -2,6 +2,8 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (url.pathname === "/api/notices") return getNotices(url, env);
+    if (url.pathname === "/api/notices/search") return searchNotices(request, url, env);
+    if (url.pathname === "/api/notices/search-options") return getNoticeSearchOptions(env);
     if (url.pathname === "/api/refresh") return handleRefresh(request, env);
     if (url.pathname === "/api/refresh-needed") return getRefreshNeeded(env);
     if (url.pathname === "/api/refresh-finish") return finishRefresh(request, env);
@@ -211,6 +213,14 @@ async function ensureFocusSchema(db) {
 
 const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryDetail";
 const ARCHIVE_SOURCES = ["mobile", "unicom", "tower", "telecom"];
+const SUPPORTED_PROVINCES = ["浙江", "江西", "福建"];
+const SUPPORTED_OPERATORS = ["中国移动", "中国联通", "中国铁塔", "中国电信"];
+const NOTICE_CATEGORY_GROUPS = {
+  "招采公告": ["招标公告", "采购公告", "直接采购公告", "询比公告", "询价公告", "比选公告"],
+  "采购需求": ["采购意见征求公告", "采购需求公示"],
+  "预公告": ["资格预审公告", "采购项目预公告"]
+};
+const SUPPORTED_NOTICE_CATEGORIES = Object.keys(NOTICE_CATEGORY_GROUPS);
 const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const OIDC_AUDIENCE = "huadong-caigou-radar";
 const REFRESH_REPOSITORY = "z1404027309-glitch/huadong-caigou-radar";
@@ -262,6 +272,382 @@ async function getNotices(url, env) {
     telecomFetchedAt: archives.telecom || "",
     errors
   }, notices.length || !errors.length ? 200 : 502);
+}
+
+async function searchNotices(request, url, env) {
+  if (!['GET', 'POST'].includes(request.method)) return json({ success: false, error: "method_not_allowed" }, 405, "no-store");
+  const focusRules = await readFocusRules(env);
+  let body;
+  if (request.method === "GET") {
+    const query = String(url.searchParams.get("query") || url.searchParams.get("q") || "").trim();
+    body = parseNaturalNoticeQuery(query, focusRules);
+    if (url.searchParams.has("limit")) body.limit = url.searchParams.get("limit");
+  } else {
+    body = await request.json().catch(() => null);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return json({ success: false, error: "invalid_json_body" }, 400, "no-store");
+    }
+  }
+
+  const filters = normalizeNoticeSearchFilters(body);
+  if (filters.error) return json({ success: false, error: filters.error }, 400, "no-store");
+
+  const { notices, errors } = await loadNotices(url, env, filters.publishStart, filters.publishEnd);
+  const matched = notices
+    .filter((item) => matchesStructuredNoticeSearch(item, filters, focusRules))
+    .sort((a, b) => compareNotices(a, b, filters.sort));
+  const items = matched.slice(0, filters.limit).map(toPublicNoticeItem);
+  const summary = buildNoticeSearchSummary(matched);
+
+  return json({
+    success: true,
+    total: matched.length,
+    returned: items.length,
+    summary,
+    appliedFilters: filters,
+    items,
+    ...(errors.length ? { sourceErrors: errors } : {})
+  }, 200, "no-store");
+}
+
+function parseNaturalNoticeQuery(query, focusRules) {
+  const today = new Date().toISOString().slice(0, 10);
+  const provinces = /三省/.test(query) ? [...SUPPORTED_PROVINCES] : SUPPORTED_PROVINCES.filter((province) => query.includes(province));
+  const operators = SUPPORTED_OPERATORS.filter((operator) => query.includes(operator) || query.includes(operator.replace("中国", "")));
+  const broadProcurementQuery = /招采(?:公告|信息|资讯)|招标采购(?:公告|信息|资讯)|采购招标(?:公告|信息|资讯)|招投标(?:公告|信息|资讯)/.test(query);
+  const noticeCategoryAliases = [
+    ["招采公告", /招采(?:公告|信息|资讯)|招标采购(?:公告|信息|资讯)|采购招标(?:公告|信息|资讯)|招投标(?:公告|信息|资讯)|招标|采购公告|直接采购|单一来源|询比|询价|比选/],
+    ["采购需求", /采购需求|意见征求|征求意见|需求公示/],
+    ["预公告", /预公告|资格预审/]
+  ];
+  const noticeCategories = [...new Set([
+    ...SUPPORTED_NOTICE_CATEGORIES.filter((category) => query.includes(category)),
+    ...noticeCategoryAliases.filter(([, pattern]) => pattern.test(query)).map(([category]) => category)
+  ])];
+  const sourceCategories = [...new Set([
+    ...(!broadProcurementQuery && /招标(?!采购)|招投标/.test(query) ? ["招标公告"] : []),
+    ...(!broadProcurementQuery && /直接采购|单一来源/.test(query) ? ["直接采购公告"] : []),
+    ...(!broadProcurementQuery && /采购公告/.test(query) && !/直接采购|单一来源/.test(query) ? ["采购公告"] : []),
+    ...(/询比/.test(query) ? ["询比公告"] : []),
+    ...(/询价/.test(query) ? ["询价公告"] : []),
+    ...(/比选/.test(query) && !/询比/.test(query) ? ["比选公告"] : []),
+    ...(/采购意见征求|意见征求/.test(query) ? ["采购意见征求公告"] : []),
+    ...(/采购需求公示|需求公示/.test(query) ? ["采购需求公示"] : []),
+    ...(/资格预审/.test(query) ? ["资格预审公告"] : []),
+    ...(/采购项目预公告|项目预公告/.test(query) ? ["采购项目预公告"] : [])
+  ])];
+  const directRuleNames = focusRules.filter((rule) => query.includes(rule.name)).map((rule) => rule.name);
+  const directGroupNames = focusRules.filter((rule) => query.includes(rule.groupName)).map((rule) => rule.groupName);
+  const focusCategories = [...new Set([...directRuleNames, ...directGroupNames])];
+  const matchedFocusKeywords = [...new Set(focusRules.flatMap((rule) => rule.keywords)
+    .filter((keyword) => normalizeSearchText(query).includes(normalizeSearchText(keyword))))];
+  const { publishStart, publishEnd } = naturalDateRange(query, today);
+  const sort = /预算|金额/.test(query) && /排序|从高到低|降序|最高/.test(query)
+    ? "budget_desc"
+    : /截止时间|截止日期/.test(query) && /排序|临近|最近|升序/.test(query)
+      ? "deadline_asc"
+      : /发布时间|发布日期/.test(query) && /从早到晚|升序/.test(query)
+        ? "publishDate_asc"
+        : "publishDate_desc";
+
+  let keywordText = query;
+  keywordText = keywordText.replace(/按(?:预算|金额|截止时间|截止日期|发布时间|发布日期)(?:排序|从高到低|从低到高|从早到晚|从晚到早|升序|降序)?/g, " ");
+  const removable = [
+    ...SUPPORTED_PROVINCES.flatMap((value) => [value, `${value}省`]),
+    ...SUPPORTED_OPERATORS.flatMap((value) => [value, value.replace("中国", "")]),
+    ...SUPPORTED_NOTICE_CATEGORIES,
+    ...Object.values(NOTICE_CATEGORY_GROUPS).flat(),
+    "招采信息", "招采资讯", "招标采购信息", "招标采购资讯", "采购招标公告", "采购招标信息", "采购招标资讯", "招投标信息", "招投标资讯",
+    "直接采购", "单一来源", "意见征求", "征求意见", "需求公示", "询比", "询价", "比选", "招标", "资格预审", "项目预公告", "采购预公告",
+    ...focusRules.flatMap((rule) => [rule.name, rule.groupName, ...rule.keywords]),
+    "按预算排序", "按金额排序", "按截止时间排序", "按截止日期排序", "按发布时间排序", "按发布日期排序", "从高到低", "从低到高", "从早到晚", "从晚到早", "降序", "升序", "三省", "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "发布", "查询", "搜索", "查找", "查一下", "帮我查", "看看", "重新查询", "重新搜索", "重新查找", "重新查", "再查询", "再搜索", "再查一次", "重查", "关于", "有关", "相关", "方面", "一批",
+    "今天", "今日", "本日", "昨天", "昨日", "前天", "前日", "全天", "当日", "整天", "本周", "这周", "本月", "这个月", "一周内", "近一周", "最近一周", "一个月内", "近一个月", "最近一个月", "半年", "半年内", "近半年", "最近半年"
+  ].sort((a, b) => b.length - a.length);
+  for (const value of removable) keywordText = keywordText.replaceAll(value, " ");
+  keywordText = keywordText.replace(/20\d{2}(?:年|[-/.])\d{1,2}(?:月|[-/.])\d{1,2}日?/g, " ");
+  keywordText = keywordText.replace(/\d{1,2}月\d{1,2}日/g, " ");
+  keywordText = keywordText.replace(/(?:近|最近)?\s*(?:\d+|[一二两三四五六七八九十百]+)\s*(?:日|天)(?:之?内|以内)?/g, " ");
+  keywordText = keywordText.replace(/(?:近|最近|过去|前)?\s*(?:\d+|[一二两三四五六七八九十百]+)\s*个?月(?:之?内|以内|来)?/g, " ");
+  keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
+  const genericQueryWords = new Set(["信息", "资讯", "内容", "情况", "详情", "结果", "清单", "名单", "简报", "汇总", "总览", "摘要"]);
+  const extractedKeywords = keywordText.split(/[\s,，;；、的]+/)
+    .map((value) => value.trim().replace(/^(?:关于|有关|相关)/, "").replace(/(?:相关|方面)$/u, ""))
+    .filter((value) => value.length >= 2 && !genericQueryWords.has(value));
+  const keywords = focusCategories.length ? [] : matchedFocusKeywords.length ? matchedFocusKeywords : extractedKeywords;
+
+  return { provinces, operators, noticeCategories, sourceCategories, focusCategories, keywords, publishStart, publishEnd, sort, limit: 10 };
+}
+
+function naturalDateRange(query, today) {
+  const explicitDates = [...query.matchAll(/(20\d{2})(?:年|[-/.])(\d{1,2})(?:月|[-/.])(\d{1,2})日?/g)]
+    .map((match) => normalizeExplicitDate(match[1], match[2], match[3]))
+    .filter(Boolean);
+  if (explicitDates.length >= 2) {
+    return {
+      publishStart: explicitDates[0] <= explicitDates[1] ? explicitDates[0] : explicitDates[1],
+      publishEnd: explicitDates[0] <= explicitDates[1] ? explicitDates[1] : explicitDates[0]
+    };
+  }
+  if (explicitDates.length === 1) return { publishStart: explicitDates[0], publishEnd: explicitDates[0] };
+  const monthDay = query.match(/(?:^|\D)(\d{1,2})月(\d{1,2})日/);
+  if (monthDay) {
+    const inferred = normalizeExplicitDate(today.slice(0, 4), monthDay[1], monthDay[2]);
+    if (inferred) return { publishStart: inferred, publishEnd: inferred };
+  }
+  if (/今天|今日|本日/.test(query)) return { publishStart: today, publishEnd: today };
+  if (/昨天|昨日/.test(query)) {
+    const yesterday = offsetIsoDate(today, -1);
+    return { publishStart: yesterday, publishEnd: yesterday };
+  }
+  if (/前天|前日/.test(query)) {
+    const dayBeforeYesterday = offsetIsoDate(today, -2);
+    return { publishStart: dayBeforeYesterday, publishEnd: dayBeforeYesterday };
+  }
+  const recent = query.match(/(?:近|最近)?\s*(\d+|[一二两三四五六七八九十百]+)\s*(?:日|天)(?:之?内|以内)?/);
+  if (recent) {
+    const count = /^\d+$/.test(recent[1]) ? Number(recent[1]) : chineseInteger(recent[1]);
+    if (count > 0) return { publishStart: offsetIsoDate(today, -(Math.min(365, count) - 1)), publishEnd: today };
+  }
+  if (/一周内|近一周|最近一周/.test(query)) return { publishStart: offsetIsoDate(today, -6), publishEnd: today };
+  const recentMonths = parseMonthDuration(query);
+  if (recentMonths) return { publishStart: offsetIsoMonth(today, -recentMonths), publishEnd: today };
+  if (/一个月内|近一个月|最近一个月/.test(query)) return { publishStart: offsetIsoMonth(today, -1), publishEnd: today };
+  if (/半年(?:内)?|近半年|最近半年/.test(query)) return { publishStart: offsetIsoMonth(today, -6), publishEnd: today };
+  if (/本周|这周/.test(query)) {
+    const date = new Date(`${today}T00:00:00Z`);
+    const day = date.getUTCDay() || 7;
+    return { publishStart: offsetIsoDate(today, -(day - 1)), publishEnd: today };
+  }
+  if (/本月|这个月/.test(query)) return { publishStart: `${today.slice(0, 7)}-01`, publishEnd: today };
+  return { publishStart: "2025-01-01", publishEnd: today };
+}
+
+function normalizeExplicitDate(year, month, day) {
+  const value = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value ? "" : value;
+}
+
+function offsetIsoDate(date, days) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+function offsetIsoMonth(date, months) {
+  const [year, month, day] = date.split("-").map(Number);
+  const firstOfTarget = new Date(Date.UTC(year, month - 1 + months, 1));
+  const lastDay = new Date(Date.UTC(firstOfTarget.getUTCFullYear(), firstOfTarget.getUTCMonth() + 1, 0)).getUTCDate();
+  firstOfTarget.setUTCDate(Math.min(day, lastDay));
+  return firstOfTarget.toISOString().slice(0, 10);
+}
+
+function parseMonthDuration(query) {
+  const match = String(query || "").match(/(?:近|最近|过去|前)?\s*(\d+|[一二两三四五六七八九十百]+)\s*个?月(?:之?内|以内|来)?/);
+  if (!match) return 0;
+  const count = /^\d+$/.test(match[1]) ? Number(match[1]) : chineseInteger(match[1]);
+  return Number.isInteger(count) && count > 0 ? Math.min(120, count) : 0;
+}
+
+function chineseInteger(value) {
+  const digits = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (value === "十") return 10;
+  if (value === "百") return 100;
+  if (value.includes("百")) {
+    const [hundreds, rest = ""] = value.split("百");
+    return (digits[hundreds] || 1) * 100 + chineseInteger(rest);
+  }
+  if (value.includes("十")) {
+    const [tens, ones = ""] = value.split("十");
+    return (digits[tens] || 1) * 10 + (digits[ones] || 0);
+  }
+  return digits[value] || 0;
+}
+
+async function getNoticeSearchOptions(env) {
+  const groups = await readFocusGroups(env);
+  return json({
+    success: true,
+    provinces: SUPPORTED_PROVINCES,
+    operators: SUPPORTED_OPERATORS,
+    noticeCategories: SUPPORTED_NOTICE_CATEGORIES,
+    focusGroups: groups.map((group) => ({
+      name: group.name,
+      categories: group.rules.map((rule) => ({ name: rule.name, keywords: rule.keywords, operator: rule.operator }))
+    }))
+  }, 200, "public, max-age=60");
+}
+
+async function loadNotices(url, env, startDate, endDate) {
+  const notices = [];
+  const errors = [];
+  const storedArchives = await readStoredArchives(env);
+  for (const source of ARCHIVE_SOURCES) {
+    try {
+      let archive = storedArchives[source];
+      if (!archive) {
+        const response = await env.ASSETS.fetch(new Request(new URL(`/data/${source}-notices.json`, url.origin)));
+        if (!response.ok) throw new Error(`archive ${response.status}`);
+        archive = await response.json();
+      }
+      notices.push(...(archive.notices || [])
+        .filter((item) => item.date >= startDate && item.date <= endDate)
+        .map(normalizeCategory));
+    } catch (error) {
+      errors.push(`${source}: ${String(error?.message || error)}`);
+    }
+  }
+  return { notices, errors };
+}
+
+function normalizeNoticeSearchFilters(body) {
+  const today = new Date().toISOString().slice(0, 10);
+  const publishStart = validDate(body.publishStart || body.startDate) || "2025-01-01";
+  const publishEnd = validDate(body.publishEnd || body.endDate) || today;
+  const deadlineStart = validDate(body.deadlineStart) || "";
+  const deadlineEnd = validDate(body.deadlineEnd) || "";
+  if (publishStart > publishEnd || (deadlineStart && deadlineEnd && deadlineStart > deadlineEnd)) {
+    return { error: "invalid_date_range" };
+  }
+  return {
+    provinces: normalizeAllowedList(body.provinces ?? body.province, SUPPORTED_PROVINCES, normalizeProvince),
+    operators: normalizeAllowedList(body.operators ?? body.operator, SUPPORTED_OPERATORS, normalizeOperator),
+    noticeCategories: normalizeAllowedList(body.noticeCategories ?? body.noticeCategory, SUPPORTED_NOTICE_CATEGORIES),
+    sourceCategories: normalizeAllowedList(body.sourceCategories ?? body.sourceCategory, Object.values(NOTICE_CATEGORY_GROUPS).flat()),
+    focusCategories: normalizeStringList(body.focusCategories ?? body.focusCategory, 10),
+    keywords: normalizeStringList(body.keywords ?? body.keyword ?? body.q, 10),
+    publishStart,
+    publishEnd,
+    deadlineStart,
+    deadlineEnd,
+    budgetMin: normalizeBudgetFilter(body.budgetMin),
+    budgetMax: normalizeBudgetFilter(body.budgetMax),
+    sort: ["publishDate_desc", "publishDate_asc", "budget_desc", "deadline_asc"].includes(body.sort) ? body.sort : "publishDate_desc",
+    limit: Math.min(50, Math.max(1, Number.parseInt(body.limit || "10", 10) || 10))
+  };
+}
+
+function normalizeAllowedList(value, allowed, mapper = (item) => item) {
+  return [...new Set(normalizeStringList(value, allowed.length).map(mapper).filter((item) => allowed.includes(item)))];
+}
+
+function normalizeStringList(value, max) {
+  const list = Array.isArray(value) ? value : value == null || value === "" ? [] : [value];
+  return [...new Set(list.map((item) => String(item).trim()).filter(Boolean))].slice(0, max);
+}
+
+function normalizeProvince(value) {
+  const text = String(value || "").trim();
+  return SUPPORTED_PROVINCES.find((province) => text === province || text.startsWith(`${province}省`) || text.startsWith(`${province}分公司`))
+    || text.replace(/省$/, "");
+}
+
+function normalizeOperator(value) {
+  const short = String(value || "").replace(/^中国/, "").replace(/运营商$/, "");
+  return ({ 移动: "中国移动", 联通: "中国联通", 铁塔: "中国铁塔", 电信: "中国电信" })[short] || String(value || "");
+}
+
+function normalizeBudgetFilter(value) {
+  if (value === "" || value == null) return null;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function matchesStructuredNoticeSearch(item, filters, focusRules) {
+  const province = String(item.region || item.province || "");
+  if (filters.provinces.length && !filters.provinces.includes(province)) return false;
+  if (filters.operators.length && !filters.operators.includes(String(item.operator || ""))) return false;
+  if (filters.noticeCategories.length && !filters.noticeCategories.includes(String(item.category || ""))) return false;
+  if (filters.sourceCategories.length && !filters.sourceCategories.some((category) =>
+    category === String(item.sourceCategory || "") || category === String(item.detailCategory || "")
+  )) return false;
+
+  const deadline = firstDate(item.deadline || item.responseDeadline || item.bidDeadline);
+  if (filters.deadlineStart && (!deadline || deadline < filters.deadlineStart)) return false;
+  if (filters.deadlineEnd && (!deadline || deadline > filters.deadlineEnd)) return false;
+
+  const budget = parseBudgetWan(item.budget);
+  if (filters.budgetMin != null && (budget == null || budget < filters.budgetMin)) return false;
+  if (filters.budgetMax != null && (budget == null || budget > filters.budgetMax)) return false;
+
+  const haystack = noticeSearchHaystack(item);
+  if (filters.keywords.some((keyword) => !haystack.includes(normalizeSearchText(keyword)))) return false;
+  if (filters.focusCategories.length) {
+    const selected = focusRules.filter((rule) => filters.focusCategories.includes(rule.name) || filters.focusCategories.includes(rule.groupName));
+    const title = normalizeSearchText(item.title);
+    if (!selected.length || !selected.some((rule) =>
+      (rule.operator === "全部运营商" || rule.operator === item.operator)
+      && rule.keywords.some((keyword) => title.includes(normalizeSearchText(keyword)))
+    )) return false;
+  }
+  return true;
+}
+
+function noticeSearchHaystack(item) {
+  return normalizeSearchText([item.title, item.purchaseContent, item.category, item.sourceCategory, item.detailCategory, item.noticeType, item.projectNo, item.qualification, item.performance].filter(Boolean).join(" "));
+}
+
+function buildNoticeSearchSummary(items) {
+  const byProvince = Object.fromEntries(SUPPORTED_PROVINCES.map((province) => [province, 0]));
+  const byOperator = Object.fromEntries(SUPPORTED_OPERATORS.map((operator) => [operator, 0]));
+  const byCategory = Object.fromEntries(SUPPORTED_NOTICE_CATEGORIES.map((category) => [category, 0]));
+
+  for (const item of items) {
+    const province = String(item.region || item.province || "");
+    const operator = String(item.operator || "");
+    const category = String(item.category || "");
+    if (Object.hasOwn(byProvince, province)) byProvince[province] += 1;
+    if (Object.hasOwn(byOperator, operator)) byOperator[operator] += 1;
+    if (Object.hasOwn(byCategory, category)) byCategory[category] += 1;
+  }
+
+  return { byProvince, byOperator, byCategory };
+}
+
+function parseBudgetWan(value) {
+  const text = String(value || "").replace(/,/g, "");
+  const match = text.match(/([\d.]+)\s*(亿元|万元|元)/);
+  if (!match) return null;
+  const number = Number(match[1]);
+  if (!Number.isFinite(number)) return null;
+  return match[2] === "亿元" ? number * 10000 : match[2] === "元" ? number / 10000 : number;
+}
+
+function compareNotices(a, b, sort) {
+  if (sort === "publishDate_asc") return `${a.date} ${a.createDate || ""}`.localeCompare(`${b.date} ${b.createDate || ""}`);
+  if (sort === "budget_desc") return (parseBudgetWan(b.budget) ?? -1) - (parseBudgetWan(a.budget) ?? -1);
+  if (sort === "deadline_asc") return (firstDate(a.deadline || a.responseDeadline || a.bidDeadline) || "9999-12-31").localeCompare(firstDate(b.deadline || b.responseDeadline || b.bidDeadline) || "9999-12-31");
+  return `${b.date} ${b.createDate || ""}`.localeCompare(`${a.date} ${a.createDate || ""}`);
+}
+
+async function readFocusGroups(env) {
+  if (!env.DB) return DEFAULT_FOCUS_GROUPS.map((group) => ({
+    ...group,
+    rules: group.rules.map(([id, name, keywords]) => ({ id, name, keywords, operator: "全部运营商" }))
+  }));
+  await ensureFocusSchema(env.DB);
+  const [groupResult, ruleResult] = await Promise.all([
+    env.DB.prepare("SELECT id, name, created_at FROM focus_groups ORDER BY created_at ASC").all(),
+    env.DB.prepare("SELECT id, group_id, name, keywords, operator, created_at FROM focus_rules ORDER BY created_at ASC").all()
+  ]);
+  return (groupResult.results || []).map((group) => ({
+    ...group,
+    rules: (ruleResult.results || []).filter((rule) => rule.group_id === group.id).map((rule) => ({
+      id: rule.id,
+      name: rule.name,
+      keywords: safeKeywordList(rule.keywords),
+      operator: rule.operator || "全部运营商"
+    }))
+  }));
+}
+
+async function readFocusRules(env) {
+  const groups = await readFocusGroups(env);
+  return groups.flatMap((group) => group.rules.map((rule) => ({ ...rule, groupName: group.name })));
+}
+
+function safeKeywordList(value) {
+  try { return Array.isArray(value) ? value : JSON.parse(value || "[]"); } catch { return []; }
 }
 
 async function handleRefresh(request, env) {
@@ -467,8 +853,19 @@ function toPublicNoticeItem(item) {
     operator: String(item.operator || ""),
     province: String(item.region || item.province || ""),
     publishDate: firstDate(item.date || item.publishDate || item.createDate),
+    purchaseContent: String(item.purchaseContent || ""),
     deadline: firstDate(item.deadline || item.responseDeadline || item.bidDeadline),
     budget: String(item.budget || ""),
+    saleTime: String(item.saleTime || ""),
+    qualification: String(item.qualification || ""),
+    performance: String(item.performance || ""),
+    deadlineStatus: String(item.deadlineStatus || ""),
+    deadlineEvidence: String(item.deadlineEvidence || ""),
+    deadlineSource: String(item.deadlineSource || ""),
+    extractorVersion: item.extractorVersion == null ? null : Number(item.extractorVersion),
+    category: String(item.category || ""),
+    sourceCategory: String(item.sourceCategory || ""),
+    detailCategory: String(item.detailCategory || ""),
     url: String(item.url || "")
   };
 }
@@ -483,13 +880,40 @@ function firstDate(value) {
 }
 
 function normalizeCategory(item) {
-  if (item.category) return item;
   const title = item.title || "";
-  let category = "采购公告";
-  if (item.operator === "中国联通") category = /采购需求/.test(title) ? "采购需求公示" : /招标/.test(title) ? "招标公告" : "询比公告";
-  if (item.operator === "中国电信") category = /资格预审/.test(title) ? "资格预审公告" : /招标/.test(title) ? "招标公告" : "询比公告";
-  if (item.operator === "中国铁塔") category = String(item.noticeType) === "49" || /预公告|采购计划发布/.test(title) ? "采购项目预公告" : "采购公告";
-  return { ...item, category };
+  let sourceCategory = item.sourceCategory || item.category || "采购公告";
+  if (item.operator === "中国移动") {
+    const publishType = String(item.publishType || "");
+    const publishOneType = String(item.publishOneType || "");
+    if (publishOneType === "ONE_SOURCE_PROCUREMENT") sourceCategory = "直接采购公告";
+    else if (publishType === "PURCHASE_SERVICE" || publishOneType === "PURCHASE_OPINION") sourceCategory = "采购意见征求公告";
+    else if (publishType === "PROCUREMENT" || publishOneType === "PROCUREMENT") sourceCategory = "采购公告";
+  }
+  if (!item.sourceCategory && !item.category) {
+    if (item.operator === "中国联通") sourceCategory = /采购需求/.test(title) ? "采购需求公示" : /招标/.test(title) ? "招标公告" : "询比公告";
+    if (item.operator === "中国电信") sourceCategory = /资格预审/.test(title) ? "资格预审公告" : /招标/.test(title) ? "招标公告" : "询比公告";
+    if (item.operator === "中国铁塔") sourceCategory = String(item.noticeType) === "49" || /预公告|采购计划发布/.test(title) ? "采购项目预公告" : "采购公告";
+  }
+  const detailCategory = item.detailCategory || inferTitleCategory(title) || sourceCategory;
+  const category = Object.entries(NOTICE_CATEGORY_GROUPS).find(([, values]) =>
+    values.includes(sourceCategory) || values.includes(detailCategory)
+  )?.[0] || "招采公告";
+  return { ...item, region: normalizeProvince(item.region || item.province), sourceCategory, detailCategory, category };
+}
+
+function inferTitleCategory(title) {
+  const text = String(title || "").replace(/\s+/g, "");
+  if (/询价公告/.test(text)) return "询价公告";
+  if (/询比/.test(text) && /公告/.test(text)) return "询比公告";
+  if (/比选公告/.test(text)) return "比选公告";
+  if (/采购意见征求公告|意见征求公告|征求意见公告/.test(text)) return "采购意见征求公告";
+  if (/采购需求公示|采购需求公告/.test(text)) return "采购需求公示";
+  if (/资格预审公告/.test(text)) return "资格预审公告";
+  if (/采购项目预公告|采购预公告|项目预公告/.test(text)) return "采购项目预公告";
+  if (/直接采购公告|单一来源采购公告/.test(text)) return "直接采购公告";
+  if (/招标公告/.test(text)) return "招标公告";
+  if (/采购公告/.test(text)) return "采购公告";
+  return "";
 }
 
 async function getDocument(url) {

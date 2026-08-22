@@ -2,11 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import https from "node:https";
 import { constants as cryptoConstants } from "node:crypto";
+import { extractDeadline as extractUnifiedDeadline, textAttachmentsFromDetail } from "./lib/deadline-extractor.mjs";
+import { extractCommonNoticeFields } from "./lib/notice-field-extractor.mjs";
 
 const OUTPUT = path.resolve(process.env.MOBILE_OUTPUT || "public/data/mobile-notices.json");
 const LIST_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryList";
+const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryDetail";
 const REGIONS = ["浙江", "江西", "福建"];
 const KEEP_DAYS = Number(process.env.MOBILE_KEEP_DAYS || 365);
+const EXTRACTOR_VERSION = 12;
 const CATEGORIES = [
   { category: "采购公告", publishType: "PROCUREMENT", publishOneType: "PROCUREMENT" },
   { category: "直接采购公告", publishType: "PROCUREMENT", publishOneType: "ONE_SOURCE_PROCUREMENT" },
@@ -32,11 +36,84 @@ for (const config of CATEGORIES) {
         reachedStart = true;
         continue;
       }
-      const notice = toNotice({ ...item, category: config.category });
-      if (notice && (!notice.date || notice.date <= endDate)) collected.push(notice);
+      const base = toNotice({ ...item, category: config.category });
+      if (!base || (base.date && base.date > endDate)) continue;
+      const cached = existing.notices.find((entry) => String(entry.sourceId) === String(base.sourceId));
+      if (cached?.fieldsReady && cached.extractorVersion === EXTRACTOR_VERSION) {
+        collected.push({ ...cached, ...base });
+        continue;
+      }
+      try {
+        const detail = await fetchDetail(base);
+        collected.push(await enrichNotice(base, detail));
+      } catch (error) {
+        console.warn(`mobile detail failed ${base.sourceId}: ${error.message}`);
+        collected.push({ ...base, fieldsReady: false, extractorVersion: EXTRACTOR_VERSION });
+      }
     }
     if (page.last || (page.totalPages > 0 && current >= page.totalPages)) break;
   }
+}
+
+async function fetchDetail(item) {
+  const payload = await postJson(DETAIL_API, upstreamHeaders(), {
+    publishId: item.publishId,
+    publishUuid: item.publishUuid,
+    publishType: item.publishType,
+    publishOneType: item.publishOneType,
+    sfactApplColumn5: "PC"
+  });
+  return payload?.data || {};
+}
+
+async function enrichNotice(base, detail) {
+  const content = detail.noticeContent || detail.content || "";
+  const contentType = String(detail.contentType || "").toLowerCase();
+  let html = contentType === "pdf" ? "" : content;
+  const attachmentTexts = textAttachmentsFromDetail(detail);
+  if (contentType === "pdf" && content) {
+    const text = await extractPdfText(content).catch(() => "");
+    if (text) attachmentTexts.unshift({ text, source: "PDF：公告正文" });
+  }
+  const deadlineFields = extractUnifiedDeadline({
+    structuredValues: ["replyEndTime", "responseEndTime", "bidEndTime", "tenderEndTime", "deadline"]
+      .map((key) => detail?.[key] ? { value: detail[key], source: `详情接口.${key}` } : null)
+      .filter(Boolean),
+    html,
+    attachmentTexts
+  });
+  const recognizedFields = extractCommonNoticeFields({ html, attachmentTexts });
+  return {
+    ...base,
+    ...recognizedFields,
+    ...deadlineFields,
+    fieldsReady: true,
+    extractorVersion: EXTRACTOR_VERSION
+  };
+}
+
+async function extractPdfText(base64) {
+  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const pdf = await getDocument({ data: Uint8Array.from(Buffer.from(base64, "base64")), useWorkerFetch: false, isEvalSupported: false }).promise;
+  const pages = [];
+  for (let index = 1; index <= pdf.numPages; index++) {
+    const page = await pdf.getPage(index);
+    const content = await page.getTextContent();
+    pages.push(content.items.map((item) => `${item.str}${item.hasEOL ? "\n" : " "}`).join(""));
+  }
+  return pages.join("\n");
+}
+
+function upstreamHeaders() {
+  return {
+    accept: "application/json, text/plain, */*",
+    "content-type": "application/json",
+    origin: "https://b2b.10086.cn",
+    referer: "https://b2b.10086.cn/b2b/main/listVendorNotice.html?noticeType=2",
+    processInstId: "-1",
+    userLoginName: "-1",
+    "user-agent": "Mozilla/5.0"
+  };
 }
 
 const notices = [...new Map([...existing.notices, ...collected]
@@ -55,13 +132,7 @@ console.log(`saved ${notices.length} notices to ${OUTPUT}`);
 
 async function fetchList(current, config) {
   const payload = await postJson(LIST_API, {
-      accept: "application/json, text/plain, */*",
-      "content-type": "application/json",
-      origin: "https://b2b.10086.cn",
-      referer: "https://b2b.10086.cn/b2b/main/listVendorNotice.html?noticeType=2",
-      processInstId: "-1",
-      userLoginName: "-1",
-      "user-agent": "Mozilla/5.0"
+      ...upstreamHeaders()
     }, {
       name: "",
       publishType: config.publishType,
