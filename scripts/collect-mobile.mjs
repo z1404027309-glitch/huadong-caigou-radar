@@ -11,8 +11,11 @@ const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/
 const REGIONS = ["浙江", "江西", "福建"];
 const KEEP_DAYS = Number(process.env.MOBILE_KEEP_DAYS || 365);
 const ONLY_SOURCE_ID = String(process.env.MOBILE_ONLY_SOURCE_ID || "").trim();
+const BACKFILL_PROVINCE = String(process.env.MOBILE_BACKFILL_PROVINCE || "").trim();
+const BACKFILL_DAYS = Number(process.env.MOBILE_BACKFILL_DAYS || 0);
+const BACKFILL_TITLE = String(process.env.MOBILE_BACKFILL_TITLE || "").trim();
 const RETRY_UNRESOLVED_LIMIT = Number(process.env.MOBILE_RETRY_UNRESOLVED_LIMIT || 100);
-const EXTRACTOR_VERSION = 13;
+const EXTRACTOR_VERSION = 12;
 const CATEGORIES = [
   { category: "采购公告", publishType: "PROCUREMENT", publishOneType: "PROCUREMENT" },
   { category: "直接采购公告", publishType: "PROCUREMENT", publishOneType: "ONE_SOURCE_PROCUREMENT" },
@@ -25,6 +28,7 @@ const existing = await readArchive();
 const endDate = new Date().toISOString().slice(0, 10);
 const startDate = new Date(Date.now() - KEEP_DAYS * 86400000).toISOString().slice(0, 10);
 const collected = [];
+const backfillEnabled = Boolean(BACKFILL_PROVINCE && BACKFILL_DAYS > 0 && BACKFILL_TITLE);
 
 if (ONLY_SOURCE_ID) {
   const base = existing.notices.find((entry) => String(entry.sourceId) === ONLY_SOURCE_ID);
@@ -38,7 +42,28 @@ if (ONLY_SOURCE_ID) {
   }
 }
 
-for (const config of ONLY_SOURCE_ID ? [] : CATEGORIES) {
+if (backfillEnabled) {
+  const backfillStart = new Date(Date.now() - BACKFILL_DAYS * 86400000).toISOString().slice(0, 10);
+  const candidates = existing.notices.filter((item) =>
+    item.region === BACKFILL_PROVINCE
+    && (!item.date || item.date >= backfillStart)
+    && String(item.title || "").includes(BACKFILL_TITLE)
+    && item.publishId
+    && item.publishUuid
+  );
+  console.log(`backfilling ${candidates.length} mobile notices for ${BACKFILL_PROVINCE}/${BACKFILL_DAYS}d/${BACKFILL_TITLE}`);
+  for (const base of candidates) {
+    try {
+      const detail = await fetchDetail(base);
+      collected.push(await enrichNotice(base, detail));
+    } catch (error) {
+      console.warn(`mobile backfill failed ${base.sourceId}: ${error.message}`);
+      collected.push({ ...base, fieldsReady: false, extractorVersion: EXTRACTOR_VERSION });
+    }
+  }
+}
+
+for (const config of ONLY_SOURCE_ID || backfillEnabled ? [] : CATEGORIES) {
   let reachedStart = false;
   for (let current = 1; current <= 1000 && !reachedStart; current++) {
     const page = await fetchList(current, config);
@@ -70,7 +95,7 @@ for (const config of ONLY_SOURCE_ID ? [] : CATEGORIES) {
   }
 }
 
-if (!ONLY_SOURCE_ID && RETRY_UNRESOLVED_LIMIT > 0) {
+if (!ONLY_SOURCE_ID && !backfillEnabled && RETRY_UNRESOLVED_LIMIT > 0) {
   const attempted = new Set(collected.map((item) => String(item.sourceId)));
   const unresolved = existing.notices
     .filter((item) => item.fieldsReady !== true)
