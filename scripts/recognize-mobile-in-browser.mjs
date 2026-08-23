@@ -21,7 +21,10 @@ const candidates = notices.filter((item) =>
 console.log(`browser recognizer: ${candidates.length} candidate(s), cutoff=${cutoff}`);
 if (!candidates.length) process.exit(0);
 
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  ...(process.env.BROWSER_CHANNEL ? { channel: process.env.BROWSER_CHANNEL } : {})
+});
 let completed = 0;
 try {
   const page = await browser.newPage();
@@ -56,4 +59,3 @@ try {
 archive.fetchedAt = new Date().toISOString();
 await fs.writeFile(archivePath, `${JSON.stringify(archive, null, 2)}\n`, "utf8");
 console.log(`browser recognizer completed ${completed}/${candidates.length}`);
-
