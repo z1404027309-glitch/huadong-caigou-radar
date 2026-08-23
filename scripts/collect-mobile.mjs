@@ -10,6 +10,8 @@ const LIST_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/pu
 const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryDetail";
 const REGIONS = ["浙江", "江西", "福建"];
 const KEEP_DAYS = Number(process.env.MOBILE_KEEP_DAYS || 365);
+const ONLY_SOURCE_ID = String(process.env.MOBILE_ONLY_SOURCE_ID || "").trim();
+const RETRY_UNRESOLVED_LIMIT = Number(process.env.MOBILE_RETRY_UNRESOLVED_LIMIT || 100);
 const EXTRACTOR_VERSION = 12;
 const CATEGORIES = [
   { category: "采购公告", publishType: "PROCUREMENT", publishOneType: "PROCUREMENT" },
@@ -24,7 +26,19 @@ const endDate = new Date().toISOString().slice(0, 10);
 const startDate = new Date(Date.now() - KEEP_DAYS * 86400000).toISOString().slice(0, 10);
 const collected = [];
 
-for (const config of CATEGORIES) {
+if (ONLY_SOURCE_ID) {
+  const base = existing.notices.find((entry) => String(entry.sourceId) === ONLY_SOURCE_ID);
+  if (!base) throw new Error(`mobile notice ${ONLY_SOURCE_ID} is not present in the archive`);
+  try {
+    const detail = await fetchDetail(base);
+    collected.push(await enrichNotice(base, detail));
+  } catch (error) {
+    console.warn(`mobile detail failed ${base.sourceId}: ${error.message}`);
+    collected.push({ ...base, fieldsReady: false, extractorVersion: EXTRACTOR_VERSION });
+  }
+}
+
+for (const config of ONLY_SOURCE_ID ? [] : CATEGORIES) {
   let reachedStart = false;
   for (let current = 1; current <= 1000 && !reachedStart; current++) {
     const page = await fetchList(current, config);
@@ -38,6 +52,7 @@ for (const config of CATEGORIES) {
       }
       const base = toNotice({ ...item, category: config.category });
       if (!base || (base.date && base.date > endDate)) continue;
+      if (ONLY_SOURCE_ID && String(base.sourceId) !== ONLY_SOURCE_ID) continue;
       const cached = existing.notices.find((entry) => String(entry.sourceId) === String(base.sourceId));
       if (cached?.fieldsReady && cached.extractorVersion === EXTRACTOR_VERSION) {
         collected.push({ ...cached, ...base });
@@ -52,6 +67,26 @@ for (const config of CATEGORIES) {
       }
     }
     if (page.last || (page.totalPages > 0 && current >= page.totalPages)) break;
+  }
+}
+
+if (!ONLY_SOURCE_ID && RETRY_UNRESOLVED_LIMIT > 0) {
+  const attempted = new Set(collected.map((item) => String(item.sourceId)));
+  const unresolved = existing.notices
+    .filter((item) => item.fieldsReady !== true)
+    .filter((item) => !item.date || item.date >= startDate)
+    .filter((item) => item.publishId && item.publishUuid)
+    .filter((item) => !attempted.has(String(item.sourceId)))
+    .slice(0, RETRY_UNRESOLVED_LIMIT);
+  if (unresolved.length) console.log(`retrying ${unresolved.length} unresolved mobile notice details`);
+  for (const base of unresolved) {
+    try {
+      const detail = await fetchDetail(base);
+      collected.push(await enrichNotice(base, detail));
+    } catch (error) {
+      console.warn(`mobile unresolved retry failed ${base.sourceId}: ${error.message}`);
+      collected.push({ ...base, fieldsReady: false, extractorVersion: EXTRACTOR_VERSION });
+    }
   }
 }
 
