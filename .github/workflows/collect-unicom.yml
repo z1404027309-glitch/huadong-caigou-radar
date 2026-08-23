@@ -44,6 +44,10 @@ jobs:
           node-version: 22
       - run: npm install --no-package-lock
       - run: npx playwright install --with-deps chromium
+      - name: Collect China Unicom
+        id: unicom
+        continue-on-error: true
+        run: npm run collect:unicom
       - name: Collect China Mobile
         id: mobile
         continue-on-error: true
@@ -54,10 +58,6 @@ jobs:
             [ "$ATTEMPT" = "3" ] && exit 1
             sleep $((ATTEMPT * 20))
           done
-      - name: Collect China Unicom
-        id: unicom
-        continue-on-error: true
-        run: npm run collect:unicom
       - name: Collect China Tower
         id: tower
         continue-on-error: true
