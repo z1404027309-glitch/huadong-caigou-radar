@@ -70,7 +70,7 @@ jobs:
         run: |
           for ATTEMPT in 1 2 3; do
             echo "China Mobile collector attempt ${ATTEMPT}/3"
-            npm run collect:mobile && node scripts/validate-publication-source.mjs mobile && exit 0
+            npm run collect:mobile && npm run recognize:mobile:browser && node scripts/validate-publication-source.mjs mobile && exit 0
             [ "$ATTEMPT" = "3" ] && exit 1
             sleep $((ATTEMPT * 20))
           done
