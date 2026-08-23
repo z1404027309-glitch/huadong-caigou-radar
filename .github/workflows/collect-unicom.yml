@@ -35,7 +35,7 @@ jobs:
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          RESULT=$(curl --fail --silent --show-error "https://huadong-caigou-radar.pages.dev/api/refresh-needed")
+          RESULT=$(curl --fail --silent --show-error "https://huadong-caigou.z1404027309.chatgpt.site/api/refresh-needed")
           echo "$RESULT" | grep -q '"shouldRun":true' && echo "should_run=true" >> "$GITHUB_OUTPUT" || echo "should_run=false" >> "$GITHUB_OUTPUT"
 
   collect:
@@ -109,7 +109,7 @@ jobs:
                 -H "Authorization: Bearer $OIDC_TOKEN" \
                 -H "Content-Type: application/json" \
                 --data-binary "@public/data/${SOURCE}-notices.json" \
-                "https://huadong-caigou-radar.pages.dev/api/archive-sync?source=${SOURCE}&batch=${BATCH_ID}"
+                "https://huadong-caigou.z1404027309.chatgpt.site/api/archive-sync?source=${SOURCE}&batch=${BATCH_ID}"
             else
               echo "Skipping ${SOURCE}: collector status is ${STATUS}"
             fi
@@ -136,4 +136,4 @@ jobs:
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
             --data-binary @- \
-            "https://huadong-caigou-radar.pages.dev/api/refresh-finish"
+            "https://huadong-caigou.z1404027309.chatgpt.site/api/refresh-finish"
