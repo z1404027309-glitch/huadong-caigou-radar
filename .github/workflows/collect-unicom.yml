@@ -47,7 +47,7 @@ jobs:
       - name: Collect China Unicom
         id: unicom
         continue-on-error: true
-        run: npm run collect:unicom
+        run: xvfb-run --auto-servernum npm run collect:unicom
       - name: Collect China Mobile
         id: mobile
         continue-on-error: true

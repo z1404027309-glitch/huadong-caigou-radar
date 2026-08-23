@@ -15,9 +15,19 @@ const KEEP_DAYS = Number(process.env.UNICOM_KEEP_DAYS || 365);
 const EXTRACTOR_VERSION = 12;
 const CATEGORY_NAMES = { "022001": "采购需求公示", "022002": "招标公告", "022003": "询比公告" };
 
+const proxyServer = String(process.env.UNICOM_PROXY || "").trim();
+const executablePath = String(process.env.UNICOM_EXECUTABLE_PATH || "").trim();
+// The Unicom entry verification rejects Playwright's headless/automation launch
+// profile. Keep a real browser window (or an Xvfb-backed one in CI).
+const headless = process.env.UNICOM_HEADLESS === "true";
 const browser = await chromium.launch({
-  headless: true,
-  ...(process.platform === "win32" && process.env.CI !== "true" ? { channel: "msedge" } : {})
+  headless,
+  args: ["--disable-blink-features=AutomationControlled"],
+  ignoreDefaultArgs: ["--enable-automation"],
+  ...(proxyServer ? { proxy: { server: proxyServer } } : {}),
+  ...(executablePath
+    ? { executablePath }
+    : process.platform === "win32" && process.env.CI !== "true" ? { channel: "msedge" } : {})
 });
 const context = await browser.newContext({
   locale: "zh-CN"
@@ -27,30 +37,22 @@ const cdp = await context.newCDPSession(page);
 await cdp.send("Debugger.setSkipAllPauses", { skip: true });
 
 try {
-  const initialListResponse = page.waitForResponse(isSuccessfulListResponse, { timeout: 90_000 });
-  await page.goto("https://www.chinaunicombidding.cn/bidInformation", {
+  const entryResponse = await page.goto("https://www.chinaunicombidding.cn/bidInformation", {
     waitUntil: "networkidle",
     timeout: 90_000
   });
-  const firstResponse = await initialListResponse;
-  const signedListUrl = firstResponse.url();
-  const firstPayload = await readJsonResponse(firstResponse, "initial list request");
+  console.log(`entry status=${entryResponse?.status() ?? "none"} url=${redactUrl(page.url())} title=${JSON.stringify(await page.title())}`);
 
-  const allRecords = await fetchList(page, signedListUrl, firstPayload);
-  const provinceNames = new Set(PROVINCES.map((item) => item.name));
-  const summaries = allRecords
-    .filter((record) => record?.id)
-    .filter((record) => provinceNames.has(String(record.provinceName || "").replace(/省$/, "")))
-    .filter((record) => ANNO_TYPES.includes(String(record.annoTypeId || record.annoType || "")))
-    .map((record) => {
-      const annoTypeId = String(record.annoTypeId || record.annoType || "");
-      return {
-        ...record,
-        annoTypeId,
-        category: CATEGORY_NAMES[annoTypeId] || record.annoType || "采购公告",
-        provinceName: String(record.provinceName || "").replace(/省$/, "")
-      };
-    });
+  const summaries = [];
+  for (const province of PROVINCES) {
+    for (const annoType of ANNO_TYPES) {
+      const records = await fetchList(page, province.code, annoType);
+      for (const record of records) {
+        if (!record?.id) continue;
+        summaries.push({ ...record, category: CATEGORY_NAMES[annoType], provinceName: record.provinceName || province.name });
+      }
+    }
+  }
 
   const unique = [...new Map(summaries.map((item) => [String(item.id), item])).values()];
   const existing = await readArchive();
@@ -65,7 +67,7 @@ try {
     }
     console.log(`[${index + 1}/${unique.length}] ${summary.provinceName} ${summary.annoName}`);
     try {
-      const detail = await fetchDetail(page, summary.id, summary.annoTypeId || summary.annoType);
+      const detail = await fetchDetail(page, summary.id, summary.annoType);
       collected.push(toNotice(summary, detail));
     } catch (error) {
       console.warn(`detail failed ${summary.id}: ${error.message}`);
@@ -91,51 +93,76 @@ try {
   await browser.close();
 }
 
-function isSuccessfulListResponse(response) {
-  return response.url().includes("/api/v1/bizAnno/getAnnoList")
-    && response.request().method() === "POST"
-    && response.status() === 200;
-}
-
-async function readJsonResponse(response, label) {
-  const contentType = response.headers()["content-type"] || "";
-  const text = await response.text();
-  if (!/application\/json/i.test(contentType) || !text.trim()) {
-    throw new Error(`${label} returned ${response.status()} ${contentType || "unknown content-type"} (${text.length} bytes)`);
-  }
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new Error(`${label} returned invalid JSON: ${error.message}`);
-  }
-}
-
-async function fetchList(page, signedUrl, first) {
-  if (!first?.success) throw new Error(first?.message || "initial list request failed");
-  const records = [...(first.data?.records || [])];
-  const pages = Math.min(Number(first.data?.pages || 1), Number(process.env.UNICOM_MAX_PAGES || 100));
+async function fetchList(page, provinceCode, annoType) {
+  const first = await page.evaluate(async ({ provinceCode, annoType }) => {
+    const response = await fetch("/api/v1/bizAnno/getAnnoList", {
+      method: "POST",
+      headers: { "Content-Type": "application/json;charset=UTF-8" },
+      body: JSON.stringify({
+        pageNo: 1,
+        pageSize: 100,
+        modeNo: "BizAnnoVoMtable",
+        annoType,
+        provinceCode,
+        tenderingType: "1"
+      })
+    });
+    return {
+      status: response.status,
+      contentType: response.headers.get("content-type") || "",
+      text: await response.text()
+    };
+  }, { provinceCode, annoType });
+  const firstPayload = parseListResponse(first, `list ${provinceCode}/${annoType} page 1`);
+  if (!firstPayload?.success) throw new Error(firstPayload?.message || "list request failed");
+  const records = [...(firstPayload.data?.records || [])];
+  const pages = Math.min(Number(firstPayload.data?.pages || 1), 10);
   for (let pageNo = 2; pageNo <= pages; pageNo++) {
-    const next = await page.evaluate(async ({ signedUrl, pageNo }) => {
-      const response = await fetch(signedUrl, {
+    const next = await page.evaluate(async ({ provinceCode, annoType, pageNo }) => {
+      const response = await fetch("/api/v1/bizAnno/getAnnoList", {
         method: "POST",
         headers: { "Content-Type": "application/json;charset=UTF-8" },
         body: JSON.stringify({
           pageNo,
           pageSize: 100,
-          modeNo: "BizAnnoVoMtable"
+          modeNo: "BizAnnoVoMtable",
+          annoType,
+          provinceCode,
+          tenderingType: "1"
         })
       });
-      const text = await response.text();
-      return { status: response.status, contentType: response.headers.get("content-type") || "", text };
-    }, { signedUrl, pageNo });
-    if (next.status !== 200 || !/application\/json/i.test(next.contentType) || !next.text.trim()) {
-      throw new Error(`list page ${pageNo} returned ${next.status} ${next.contentType || "unknown content-type"} (${next.text.length} bytes)`);
-    }
-    const payload = JSON.parse(next.text);
-    if (!payload?.success) throw new Error(payload?.message || `list page ${pageNo} failed`);
-    records.push(...(payload.data?.records || []));
+      return {
+        status: response.status,
+        contentType: response.headers.get("content-type") || "",
+        text: await response.text()
+      };
+    }, { provinceCode, annoType, pageNo });
+    const nextPayload = parseListResponse(next, `list ${provinceCode}/${annoType} page ${pageNo}`);
+    if (!nextPayload?.success) throw new Error(nextPayload?.message || `list page ${pageNo} failed`);
+    records.push(...(nextPayload.data?.records || []));
   }
   return records;
+}
+
+function parseListResponse(result, label) {
+  const text = String(result?.text || "");
+  if (result?.status !== 200 || !text.trim()) {
+    throw new Error(`${label} returned HTTP ${result?.status ?? "unknown"}, ${result?.contentType || "unknown content-type"}, ${text.length} bytes`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(`${label} returned invalid JSON (${text.length} bytes): ${error.message}`);
+  }
+}
+
+function redactUrl(value) {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "invalid-url";
+  }
 }
 
 async function fetchDetail(page, id, annoType) {
@@ -187,8 +214,8 @@ function summaryToBase(item) {
     createDate: item.createDate || "",
     projectNo: item.projectNo || "",
     bidNo: item.bidNo || "",
-    noticeType: item.annoTypeId || item.annoType || "",
-    category: item.category || CATEGORY_NAMES[item.annoTypeId || item.annoType] || "采购公告",
+    noticeType: item.annoType || "",
+    category: item.category || CATEGORY_NAMES[item.annoType] || "采购公告",
     saleTime: formatRange(item.annoStartDate, item.tenderEndDate),
     deadline: formatDateTime(item.replyEndTime),
     url: `https://www.chinaunicombidding.cn/bidInformation/detail?id=${id}`
