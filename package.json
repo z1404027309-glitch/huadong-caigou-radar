@@ -10,6 +10,7 @@
     "test:deadline": "node scripts/test-deadline-extractor.mjs",
     "test:fields": "node scripts/test-notice-field-extractor.mjs",
     "collect:mobile": "node scripts/collect-mobile.mjs",
+    "recognize:mobile:browser": "node scripts/recognize-mobile-in-browser.mjs",
     "collect:unicom": "node scripts/collect-unicom.mjs",
     "collect:tower": "node scripts/collect-tower.mjs",
     "collect:telecom": "node scripts/collect-telecom.mjs"
