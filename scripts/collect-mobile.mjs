@@ -12,7 +12,7 @@ const REGIONS = ["浙江", "江西", "福建"];
 const KEEP_DAYS = Number(process.env.MOBILE_KEEP_DAYS || 365);
 const ONLY_SOURCE_ID = String(process.env.MOBILE_ONLY_SOURCE_ID || "").trim();
 const RETRY_UNRESOLVED_LIMIT = Number(process.env.MOBILE_RETRY_UNRESOLVED_LIMIT || 100);
-const EXTRACTOR_VERSION = 12;
+const EXTRACTOR_VERSION = 13;
 const CATEGORIES = [
   { category: "采购公告", publishType: "PROCUREMENT", publishOneType: "PROCUREMENT" },
   { category: "直接采购公告", publishType: "PROCUREMENT", publishOneType: "ONE_SOURCE_PROCUREMENT" },

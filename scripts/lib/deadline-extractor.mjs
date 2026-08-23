@@ -92,17 +92,27 @@ export function textAttachmentsFromDetail(detail) {
 
 function findLabeledDeadline(text) {
   const label = text.match(DEADLINE_LABEL);
-  if (!label) return null;
-  const tail = text.slice(label.index, label.index + 180);
-  if (/截止时间(?:之前|以前|前)\s*\d+\s*(?:个?月|天|日|工作日)/.test(tail.slice(0, 80))) return null;
-  const dateMatch = tail.match(new RegExp(DATE_PATTERN));
-  if (!dateMatch) return null;
-  const deadline = normalizeDateTime(dateMatch[0]);
-  if (!deadline) return null;
-  const start = Math.max(0, label.index - 8);
-  const end = label.index + dateMatch.index + dateMatch[0].length + 8;
-  const evidence = text.slice(start, Math.min(text.length, end)).replace(/\n/g, " ").trim();
-  return { deadline, evidence };
+  if (label) {
+    const tail = text.slice(label.index, label.index + 180);
+    if (!/截止时间(?:之前|以前|前)\s*\d+\s*(?:个?月|天|日|工作日)/.test(tail.slice(0, 80))) {
+      const dateMatch = tail.match(new RegExp(DATE_PATTERN));
+      const deadline = dateMatch ? normalizeDateTime(dateMatch[0]) : "";
+      if (deadline) {
+        const start = Math.max(0, label.index - 8);
+        const end = label.index + dateMatch.index + dateMatch[0].length + 8;
+        const evidence = text.slice(start, Math.min(text.length, end)).replace(/\n/g, " ").trim();
+        return { deadline, evidence };
+      }
+    }
+  }
+
+  // Browser-side recognition removes PDF layout whitespace first. Mirror that
+  // fallback so archived/API fields match what the website can recognize.
+  const compact = text.replace(/\s+/g, "");
+  const compactMatch = compact.match(/(?:(?:应答|响应|投标)文件(?:递交|提交)?截止时间|(?:应答|响应|投标)截止时间)(?:[（(]即(?:应答|响应|投标)截止时间[）)])?(?:为|：|:)?(20\d{2}年\d{1,2}月\d{1,2}日\d{1,2}时\d{1,2}分)/);
+  if (!compactMatch) return null;
+  const deadline = normalizeDateTime(compactMatch[1]);
+  return deadline ? { deadline, evidence: compactMatch[0] } : null;
 }
 
 function result(deadline, evidence, source) {
