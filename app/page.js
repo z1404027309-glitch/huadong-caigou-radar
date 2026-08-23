@@ -216,6 +216,11 @@ export default function Home() {
     void loadScoringSettings();
   }, []);
 
+  useEffect(() => {
+    window.__HUADONG_RECOGNIZE_NOTICE__ = (item, force = true) => recognizeNotice(item, force);
+    return () => { delete window.__HUADONG_RECOGNIZE_NOTICE__; };
+  }, []);
+
   useEffect(() => () => {
     if (refreshPollId.current) clearTimeout(refreshPollId.current);
   }, []);
