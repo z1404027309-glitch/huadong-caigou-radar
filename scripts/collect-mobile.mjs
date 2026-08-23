@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import https from "node:https";
+import os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { constants as cryptoConstants } from "node:crypto";
 import { extractDeadline as extractUnifiedDeadline, textAttachmentsFromDetail } from "./lib/deadline-extractor.mjs";
 import { extractCommonNoticeFields } from "./lib/notice-field-extractor.mjs";
@@ -15,6 +18,7 @@ const BACKFILL_PROVINCE = String(process.env.MOBILE_BACKFILL_PROVINCE || "").tri
 const BACKFILL_DAYS = Number(process.env.MOBILE_BACKFILL_DAYS || 0);
 const BACKFILL_TITLE = String(process.env.MOBILE_BACKFILL_TITLE || "").trim();
 const RETRY_UNRESOLVED_LIMIT = Number(process.env.MOBILE_RETRY_UNRESOLVED_LIMIT || 100);
+const OCR_LIMIT = Number(process.env.MOBILE_OCR_LIMIT || 20);
 const EXTRACTOR_VERSION = 12;
 const CATEGORIES = [
   { category: "采购公告", publishType: "PROCUREMENT", publishOneType: "PROCUREMENT" },
@@ -23,6 +27,8 @@ const CATEGORIES = [
 ];
 const legacyAgent = new https.Agent({ secureOptions: cryptoConstants.SSL_OP_LEGACY_SERVER_CONNECT });
 const REQUEST_RETRIES = Number(process.env.MOBILE_REQUEST_RETRIES || 6);
+const execFileAsync = promisify(execFile);
+let ocrAttempts = 0;
 
 const existing = await readArchive();
 const endDate = new Date().toISOString().slice(0, 10);
@@ -135,13 +141,25 @@ async function enrichNotice(base, detail) {
     const text = await extractPdfText(content).catch(() => "");
     if (text) attachmentTexts.unshift({ text, source: "PDF：公告正文" });
   }
-  const deadlineFields = extractUnifiedDeadline({
-    structuredValues: ["replyEndTime", "responseEndTime", "bidEndTime", "tenderEndTime", "deadline"]
-      .map((key) => detail?.[key] ? { value: detail[key], source: `详情接口.${key}` } : null)
-      .filter(Boolean),
+  const structuredValues = ["replyEndTime", "responseEndTime", "bidEndTime", "tenderEndTime", "deadline"]
+    .map((key) => detail?.[key] ? { value: detail[key], source: `详情接口.${key}` } : null)
+    .filter(Boolean);
+  let deadlineFields = extractUnifiedDeadline({
+    structuredValues,
     html,
     attachmentTexts
   });
+  if (!deadlineFields.deadline && contentType === "pdf" && content && ocrAttempts < OCR_LIMIT) {
+    ocrAttempts += 1;
+    const ocrText = await extractPdfOcrText(content).catch((error) => {
+      console.warn(`mobile PDF OCR failed ${base.sourceId}: ${error.message}`);
+      return "";
+    });
+    if (ocrText) {
+      attachmentTexts.unshift({ text: ocrText, source: "OCR：公告正文PDF" });
+      deadlineFields = extractUnifiedDeadline({ structuredValues, html, attachmentTexts });
+    }
+  }
   const recognizedFields = extractCommonNoticeFields({ html, attachmentTexts });
   return {
     ...base,
@@ -162,6 +180,33 @@ async function extractPdfText(base64) {
     pages.push(content.items.map((item) => `${item.str}${item.hasEOL ? "\n" : " "}`).join(""));
   }
   return pages.join("\n");
+}
+
+async function extractPdfOcrText(base64) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "mobile-pdf-ocr-"));
+  const pdfPath = path.join(tempDir, "notice.pdf");
+  const pagePrefix = path.join(tempDir, "page");
+  try {
+    await fs.writeFile(pdfPath, Buffer.from(base64, "base64"));
+    await execFileAsync("pdftoppm", ["-f", "1", "-l", "4", "-jpeg", "-r", "180", pdfPath, pagePrefix], {
+      timeout: 120000,
+      maxBuffer: 1024 * 1024
+    });
+    const pageFiles = (await fs.readdir(tempDir))
+      .filter((name) => /^page-\d+\.jpg$/i.test(name))
+      .sort((a, b) => Number(a.match(/\d+/)?.[0]) - Number(b.match(/\d+/)?.[0]));
+    const pages = [];
+    for (const file of pageFiles) {
+      const { stdout } = await execFileAsync("tesseract", [path.join(tempDir, file), "stdout", "-l", "chi_sim+eng", "--psm", "6"], {
+        timeout: 120000,
+        maxBuffer: 8 * 1024 * 1024
+      });
+      pages.push(stdout);
+    }
+    return pages.join("\n");
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 }
 
 function upstreamHeaders() {

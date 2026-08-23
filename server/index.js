@@ -712,19 +712,46 @@ async function finishRefresh(request, env) {
   const claims = await verifyGithubOidcToken(token).catch(() => null);
   if (!claims) return json({ error: "unauthorized" }, 401, "no-store");
   const results = await request.json().catch(() => ({}));
+  const batchId = String(results.batchId || "");
+  if (!validBatchId(batchId)) return json({ error: "invalid_batch_id" }, 400, "no-store");
   const failedSources = ARCHIVE_SOURCES.filter((source) => results[source] !== "success");
   await ensureArchiveSchema(env.DB);
   const job = await env.DB.prepare("SELECT id FROM refresh_jobs WHERE status IN ('queued', 'running') ORDER BY requested_at DESC LIMIT 1").first();
-  const status = "completed";
-  if (job) await env.DB.prepare("UPDATE refresh_jobs SET status = ? WHERE id = ?").bind(status, job.id).run();
-  return json({ success: true, status, failedSources }, 200, "no-store");
+  if (failedSources.length) {
+    await env.DB.prepare("UPDATE notice_publication_batches SET status = 'failed', completed_at = ? WHERE batch_id = ?")
+      .bind(new Date().toISOString(), batchId).run();
+    if (job) await env.DB.prepare("UPDATE refresh_jobs SET status = 'failed' WHERE id = ?").bind(job.id).run();
+    return json({ success: false, status: "failed", batchId, failedSources }, 409, "no-store");
+  }
+
+  const staged = await env.DB.prepare("SELECT source, fetched_at, payload FROM notice_archive_staging WHERE batch_id = ?")
+    .bind(batchId).all();
+  const rows = staged.results || [];
+  const stagedSources = new Set(rows.map((row) => row.source));
+  const missingSources = ARCHIVE_SOURCES.filter((source) => !stagedSources.has(source));
+  if (missingSources.length) {
+    return json({ error: "incomplete_batch", batchId, missingSources }, 409, "no-store");
+  }
+
+  const completedAt = new Date().toISOString();
+  const statements = rows.map((row) => env.DB.prepare(`INSERT INTO notice_archives (source, fetched_at, payload, updated_at)
+    VALUES (?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET
+    fetched_at = excluded.fetched_at, payload = excluded.payload, updated_at = excluded.updated_at`)
+    .bind(row.source, row.fetched_at, row.payload, completedAt));
+  statements.push(env.DB.prepare("UPDATE notice_publication_batches SET status = 'completed', completed_at = ? WHERE batch_id = ?")
+    .bind(completedAt, batchId));
+  if (job) statements.push(env.DB.prepare("UPDATE refresh_jobs SET status = 'completed' WHERE id = ?").bind(job.id));
+  await env.DB.batch(statements);
+  return json({ success: true, status: "completed", batchId, failedSources: [] }, 200, "no-store");
 }
 
 async function syncNoticeArchive(request, env) {
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405, "no-store");
   if (!env.DB) return json({ error: "archive_database_unavailable" }, 503, "no-store");
   const source = new URL(request.url).searchParams.get("source") || "";
+  const batchId = new URL(request.url).searchParams.get("batch") || "";
   if (!ARCHIVE_SOURCES.includes(source)) return json({ error: "invalid_source" }, 400, "no-store");
+  if (!validBatchId(batchId)) return json({ error: "invalid_batch_id" }, 400, "no-store");
   const token = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const claims = await verifyGithubOidcToken(token).catch(() => null);
   if (!claims) return json({ error: "unauthorized" }, 401, "no-store");
@@ -735,12 +762,16 @@ async function syncNoticeArchive(request, env) {
   }
   const fetchedAt = String(archive.fetchedAt || new Date().toISOString());
   await ensureArchiveSchema(env.DB);
-  await env.DB.prepare(`INSERT INTO notice_archives (source, fetched_at, payload, updated_at)
-    VALUES (?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET
-    fetched_at = excluded.fetched_at, payload = excluded.payload, updated_at = excluded.updated_at`)
-    .bind(source, fetchedAt, JSON.stringify({ ...archive, fetchedAt }), new Date().toISOString()).run();
-  await completeRefreshJobs(env.DB);
-  return json({ success: true, source, fetchedAt, count: archive.notices.length }, 200, "no-store");
+  const updatedAt = new Date().toISOString();
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO notice_publication_batches (batch_id, status, created_at, completed_at)
+      VALUES (?, 'pending', ?, NULL) ON CONFLICT(batch_id) DO NOTHING`).bind(batchId, updatedAt),
+    env.DB.prepare(`INSERT INTO notice_archive_staging (batch_id, source, fetched_at, payload, updated_at)
+      VALUES (?, ?, ?, ?, ?) ON CONFLICT(batch_id, source) DO UPDATE SET
+      fetched_at = excluded.fetched_at, payload = excluded.payload, updated_at = excluded.updated_at`)
+      .bind(batchId, source, fetchedAt, JSON.stringify({ ...archive, fetchedAt }), updatedAt)
+  ]);
+  return json({ success: true, status: "pending", batchId, source, fetchedAt, count: archive.notices.length }, 200, "no-store");
 }
 
 async function ensureArchiveSchema(db) {
@@ -755,8 +786,26 @@ async function ensureArchiveSchema(db) {
       id TEXT PRIMARY KEY,
       requested_at TEXT NOT NULL,
       status TEXT NOT NULL
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS notice_publication_batches (
+      batch_id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      completed_at TEXT
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS notice_archive_staging (
+      batch_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (batch_id, source)
     )`)
   ]);
+}
+
+function validBatchId(value) {
+  return /^[A-Za-z0-9_.-]{1,100}$/.test(String(value || ""));
 }
 
 async function readStoredArchives(env) {

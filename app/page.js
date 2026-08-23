@@ -118,6 +118,11 @@ export default function Home() {
           await refresh();
           return;
         }
+        if (data.status === "failed") {
+          setCollectStatus("error");
+          setCollectMessage("本批次采集或识别未全部完成，继续保留上一批完整数据");
+          return;
+        }
         setCollectStatus(data.status === "idle" ? "queued" : data.status);
       } catch {}
       scheduleRefreshPoll();
