@@ -39,7 +39,8 @@ try {
     console.log(`browser recognizing ${item.sourceId}: ${item.title}`);
     const result = await page.evaluate(async (notice) => window.__HUADONG_RECOGNIZE_NOTICE__(notice, true), item);
     const deadline = result.deadline === "公告未单独列示" ? "" : String(result.deadline || "");
-    const budget = result.budget === "公告未明确列示" ? "" : String(result.budget || "");
+    const websiteBudget = result.budget === "公告未明确列示" ? "" : String(result.budget || "");
+    const budget = websiteBudget || String(item.budget || "");
     Object.assign(item, result, {
       deadline,
       budget,
