@@ -1047,6 +1047,8 @@ function extractBudget(text) {
 
 function extractMoney(value) {
   const compact = String(value || "").replace(/\s+/g, "");
+  const explicitUntaxed = compact.match(/([0-9][\d,.]*)(万元|亿元|元)[（(]不含税[）)]/);
+  if (explicitUntaxed) return formatMoney(explicitUntaxed[1], explicitUntaxed[2]);
   const taxed = compact.match(/([0-9][\d,.]*)(万元|亿元|元)[（(]含税[）)]/);
   if (taxed) return formatMoney(taxed[1], taxed[2]);
   const plainTaxed = compact.match(/^[：:,，。]*([0-9][\d,.]*)[（(]含税[）)]/);
