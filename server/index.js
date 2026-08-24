@@ -367,6 +367,7 @@ function parseNaturalNoticeQuery(query, focusRules) {
   keywordText = keywordText.replace(/20\d{2}(?:年|[-/.])\d{1,2}(?:月|[-/.])\d{1,2}日?/g, " ");
   keywordText = keywordText.replace(/\d{1,2}月\d{1,2}日/g, " ");
   keywordText = keywordText.replace(/(?:近|最近)?\s*(?:\d+|[一二两三四五六七八九十百]+)\s*(?:日|天)(?:之?内|以内)?/g, " ");
+  keywordText = keywordText.replace(/(?:近|最近|过去|前)?\s*(?:\d+|[一二两三四五六七八九十百]+)\s*个?周(?:之?内|以内|来)?/g, " ");
   keywordText = keywordText.replace(/(?:近|最近|过去|前)?\s*(?:\d+|[一二两三四五六七八九十百]+)\s*个?月(?:之?内|以内|来)?/g, " ");
   keywordText = keywordText.replace(/(?:至|到|~|～)/g, " ");
   const genericQueryWords = new Set(["信息", "资讯", "内容", "情况", "详情", "结果", "清单", "名单", "简报", "汇总", "总览", "摘要"]);
@@ -408,7 +409,8 @@ function naturalDateRange(query, today) {
     const count = /^\d+$/.test(recent[1]) ? Number(recent[1]) : chineseInteger(recent[1]);
     if (count > 0) return { publishStart: offsetIsoDate(today, -(Math.min(365, count) - 1)), publishEnd: today };
   }
-  if (/一周内|近一周|最近一周/.test(query)) return { publishStart: offsetIsoDate(today, -6), publishEnd: today };
+  const recentWeeks = parseWeekDuration(query);
+  if (recentWeeks) return { publishStart: offsetIsoDate(today, -(recentWeeks * 7 - 1)), publishEnd: today };
   const recentMonths = parseMonthDuration(query);
   if (recentMonths) return { publishStart: offsetIsoMonth(today, -recentMonths), publishEnd: today };
   if (/一个月内|近一个月|最近一个月/.test(query)) return { publishStart: offsetIsoMonth(today, -1), publishEnd: today };
@@ -743,6 +745,13 @@ async function finishRefresh(request, env) {
   if (job) statements.push(env.DB.prepare("UPDATE refresh_jobs SET status = 'completed' WHERE id = ?").bind(job.id));
   await env.DB.batch(statements);
   return json({ success: true, status: "completed", batchId, failedSources: [] }, 200, "no-store");
+}
+
+function parseWeekDuration(query) {
+  const match = String(query || "").match(/(?:近|最近|过去|前)?\s*(\d+|[一二两三四五六七八九十百]+)\s*个?周(?:之?内|以内|来)?/);
+  if (!match) return 0;
+  const count = /^\d+$/.test(match[1]) ? Number(match[1]) : chineseInteger(match[1]);
+  return Number.isInteger(count) && count > 0 ? Math.min(52, count) : 0;
 }
 
 async function syncNoticeArchive(request, env) {

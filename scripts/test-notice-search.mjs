@@ -224,6 +224,23 @@ for (const [duration, days] of [
   assert.equal(result.appliedFilters.publishEnd, today);
 }
 
+for (const [duration, weeks] of [
+  ["近1周", 1], ["近一周", 1], ["最近两周", 2], ["近2周", 2],
+  ["两周内", 2], ["过去三周", 3], ["3个周以内", 3]
+]) {
+  const response = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent(`福建移动${duration}招标公告`)}&limit=10`), env);
+  const result = await response.json();
+  const expectedStart = new Date(`${today}T00:00:00Z`);
+  expectedStart.setUTCDate(expectedStart.getUTCDate() - weeks * 7 + 1);
+  assert.deepEqual(result.appliedFilters.provinces, ["福建"]);
+  assert.deepEqual(result.appliedFilters.operators, ["中国移动"]);
+  assert.deepEqual(result.appliedFilters.noticeCategories, ["招采公告"]);
+  assert.deepEqual(result.appliedFilters.sourceCategories, ["招标公告"]);
+  assert.deepEqual(result.appliedFilters.keywords, [], duration);
+  assert.equal(result.appliedFilters.publishStart, expectedStart.toISOString().slice(0, 10), duration);
+  assert.equal(result.appliedFilters.publishEnd, today, duration);
+}
+
 for (const [relativeDay, offset] of [["昨天", -1], ["昨日", -1], ["前天", -2], ["前日", -2]]) {
   const response = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent(`${relativeDay}三省运营商公告简报`)}&limit=10`), env);
   const result = await response.json();
