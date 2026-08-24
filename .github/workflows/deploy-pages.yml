@@ -1,0 +1,69 @@
+name: Deploy production website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "server/**"
+      - "public/**"
+      - "scripts/prepare-cloudflare.mjs"
+      - "scripts/verify-production-search.mjs"
+      - "package.json"
+      - "package-lock.json"
+      - "next.config.mjs"
+      - "wrangler.jsonc"
+      - ".github/workflows/deploy-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-huadong-caigou-radar-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify notice search parser
+        run: npm run test:search
+
+      - name: Build production website
+        run: npm run build
+
+      - name: Deploy Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: >-
+            pages deploy out
+            --project-name=huadong-caigou-radar
+            --branch=main
+            --commit-hash=${{ github.sha }}
+            --no-bundle
+
+      - name: Verify deployed preview
+        env:
+          NOTICE_SITE_URL: ${{ steps.deploy.outputs.deployment-url }}
+        run: node scripts/verify-production-search.mjs
+
+      - name: Verify enterprise WeChat production endpoint
+        env:
+          NOTICE_SITE_URL: https://huadong-caigou-radar.pages.dev
+        run: node scripts/verify-production-search.mjs
+
