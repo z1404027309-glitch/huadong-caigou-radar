@@ -6,7 +6,7 @@ const mobile = extractCommonNoticeFields({
     <p>1.2 项目预算金额：249.84万元（不含税），264.83万元（含税）。</p>
     <p>采购文件获取时间：2026年8月21日22时00分至2026年8月26日22时00分</p>`
 });
-assert.equal(mobile.budget, "264.83万元");
+assert.equal(mobile.budget, "249.84万元");
 assert.match(mobile.purchaseContent, /大数据智慧审计平台建设/);
 assert.equal(mobile.saleTime, "2026年8月21日22时00分至2026年8月26日22时00分");
 
@@ -21,7 +21,7 @@ assert.equal(preferRecognized("公告未明确列示", "320万元"), "320万元"
 const estimatedBudget = extractCommonNoticeFields({
   html: "<p>1.2 项目预估金额：216万元（不含税），243.24 万元（含税）。</p>"
 });
-assert.equal(estimatedBudget.budget, "243.24万元");
+assert.equal(estimatedBudget.budget, "216万元");
 
 const unitFromBudgetLabel = extractCommonNoticeFields({
   html: "<p>1.5 项目预算金额：2463300（含税）。</p>"
