@@ -18,4 +18,14 @@ assert.equal(attachment.budget, "320万元");
 assert.match(attachment.qualification, /有效营业执照/);
 assert.equal(preferRecognized("公告未明确列示", "320万元"), "320万元");
 
+const estimatedBudget = extractCommonNoticeFields({
+  html: "<p>1.2 项目预估金额：216万元（不含税），243.24 万元（含税）。</p>"
+});
+assert.equal(estimatedBudget.budget, "243.24万元");
+
+const unitFromBudgetLabel = extractCommonNoticeFields({
+  html: "<p>1.5 项目预算金额：2463300（含税）。</p>"
+});
+assert.equal(unitFromBudgetLabel.budget, "2463300元");
+
 console.log("notice field extractor tests passed");
