@@ -1032,7 +1032,7 @@ function singleRequirement(value) {
 }
 
 function extractBudget(text) {
-  const labels = ["总价最高限价", "项目预算金额", "项目预算", "采购预算金额", "采购预算", "预算总金额", "预算金额"];
+  const labels = ["总价最高限价", "项目预估金额", "预估金额", "项目预算金额", "项目预算", "采购预算金额", "采购预算", "预算总金额", "预算金额"];
   for (const label of labels) {
     const index = text.indexOf(label);
     if (index < 0) continue;
@@ -1047,6 +1047,10 @@ function extractBudget(text) {
 
 function extractMoney(value) {
   const compact = String(value || "").replace(/\s+/g, "");
+  const taxed = compact.match(/([0-9][\d,.]*)(万元|亿元|元)[（(]含税[）)]/);
+  if (taxed) return formatMoney(taxed[1], taxed[2]);
+  const plainTaxed = compact.match(/^[：:,，。]*([0-9][\d,.]*)[（(]含税[）)]/);
+  if (plainTaxed) return formatMoney(plainTaxed[1], "元");
   const untaxed = compact.match(/不含税[^0-9]{0,30}(?:[（(](万元|亿元|元)[）)])?[^0-9]{0,12}([0-9][\d,.]*)(?:[（(](万元|亿元|元)[）)]|(万元|亿元|元))?/);
   if (untaxed) return formatMoney(untaxed[2], untaxed[3] || untaxed[4] || untaxed[1]);
   const amount = compact.match(/([0-9][\d,.]*)(?:[（(](万元|亿元|元)[）)]|(万元|亿元|元))/);
