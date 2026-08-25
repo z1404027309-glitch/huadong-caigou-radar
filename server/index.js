@@ -719,17 +719,20 @@ async function finishRefresh(request, env) {
   const failedSources = ARCHIVE_SOURCES.filter((source) => results[source] !== "success");
   await ensureArchiveSchema(env.DB);
   const job = await env.DB.prepare("SELECT id FROM refresh_jobs WHERE status IN ('queued', 'running') ORDER BY requested_at DESC LIMIT 1").first();
-  if (failedSources.length) {
-    await env.DB.prepare("UPDATE notice_publication_batches SET status = 'failed', completed_at = ? WHERE batch_id = ?")
-      .bind(new Date().toISOString(), batchId).run();
-    if (job) await env.DB.prepare("UPDATE refresh_jobs SET status = 'failed' WHERE id = ?").bind(job.id).run();
-    return json({ success: false, status: "failed", batchId, failedSources }, 409, "no-store");
-  }
-
   const staged = await env.DB.prepare("SELECT source, fetched_at, payload FROM notice_archive_staging WHERE batch_id = ?")
     .bind(batchId).all();
   const rows = staged.results || [];
   const stagedSources = new Set(rows.map((row) => row.source));
+  const reusedSources = [];
+  for (const source of failedSources) {
+    if (stagedSources.has(source)) continue;
+    const current = await env.DB.prepare("SELECT source, fetched_at, payload FROM notice_archives WHERE source = ?")
+      .bind(source).first();
+    if (!current) continue;
+    rows.push(current);
+    stagedSources.add(source);
+    reusedSources.push(source);
+  }
   const missingSources = ARCHIVE_SOURCES.filter((source) => !stagedSources.has(source));
   if (missingSources.length) {
     return json({ error: "incomplete_batch", batchId, missingSources }, 409, "no-store");
@@ -744,7 +747,7 @@ async function finishRefresh(request, env) {
     .bind(completedAt, batchId));
   if (job) statements.push(env.DB.prepare("UPDATE refresh_jobs SET status = 'completed' WHERE id = ?").bind(job.id));
   await env.DB.batch(statements);
-  return json({ success: true, status: "completed", batchId, failedSources: [] }, 200, "no-store");
+  return json({ success: true, status: "completed", batchId, failedSources, reusedSources }, 200, "no-store");
 }
 
 function parseWeekDuration(query) {
