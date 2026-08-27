@@ -2,8 +2,13 @@ name: Collect carrier procurement notices
 
 on:
   schedule:
+    # Beijing time: 08:15, 12:15 and 16:15.
     - cron: "15 0,4,8 * * *"
-    - cron: "*/5 * * * *"
+    # Beijing time: 00:00 (16:00 UTC on the previous calendar day).
+    - cron: "0 16 * * *"
+    # Poll refresh requests every five minutes, excluding minutes 00 and 15
+    # so a polling event can never overlap a forced collection event.
+    - cron: "5-10/5,20-55/5 * * * *"
   workflow_dispatch:
     inputs:
       mobile_pilot:
@@ -31,7 +36,9 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
-          if [ "$EVENT_NAME" = "workflow_dispatch" ] || [ "$EVENT_SCHEDULE" = "15 0,4,8 * * *" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ] || \
+             [ "$EVENT_SCHEDULE" = "15 0,4,8 * * *" ] || \
+             [ "$EVENT_SCHEDULE" = "0 16 * * *" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
