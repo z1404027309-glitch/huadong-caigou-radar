@@ -356,6 +356,27 @@ for (const queryCategory of ["采购公告", "询比公告", "招采公告", "�
   assert(result.items.every((item) => item.sourceCategory === "采购公告" && item.detailCategory === "询比公告"), queryCategory);
 }
 
+const telecomInquiryFixture = {
+  notices: [
+    { id: "telecom-fj-inquiry", title: "福建电信云平台服务项目询比公告", operator: "中国电信", region: "福建", date: "2026-08-17", category: "询比公告", url: "https://example.test/telecom-fj-inquiry" },
+    { id: "telecom-fj-tender", title: "福建电信云平台服务项目招标公告", operator: "中国电信", region: "福建", date: "2026-08-17", category: "招标公告", url: "https://example.test/telecom-fj-tender" },
+    { id: "mobile-fj-inquiry", title: "福建移动云平台服务项目询比公告", operator: "中国移动", region: "福建", date: "2026-08-17", category: "询比公告", url: "https://example.test/mobile-fj-inquiry" }
+  ]
+};
+const telecomInquiryEnv = { ...env, ASSETS: { fetch: async () => new Response(JSON.stringify(telecomInquiryFixture), { headers: { "content-type": "application/json" } }) } };
+
+const defaultSummaryResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("福建运营商2026年8月17日招采公告")}&limit=50`), telecomInquiryEnv);
+const defaultSummary = await defaultSummaryResponse.json();
+assert.equal(defaultSummary.appliedFilters.includeTelecomInquiry, false);
+assert(defaultSummary.items.every((item) => !(item.operator === "中国电信" && item.detailCategory === "询比公告")), "default searches must hide Telecom inquiry notices");
+assert(defaultSummary.items.some((item) => item.operator === "中国电信" && item.detailCategory === "招标公告"), "default searches must keep Telecom non-inquiry notices");
+
+const explicitTelecomInquiryResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("福建电信2026年8月17日询比公告")}&limit=50`), telecomInquiryEnv);
+const explicitTelecomInquiry = await explicitTelecomInquiryResponse.json();
+assert.equal(explicitTelecomInquiry.appliedFilters.includeTelecomInquiry, true);
+assert(explicitTelecomInquiry.items.length > 0, "explicit Telecom inquiry searches must return results");
+assert(explicitTelecomInquiry.items.every((item) => item.operator === "中国电信" && item.detailCategory === "询比公告"), "explicit Telecom inquiry searches must only return matching notices");
+
 console.log(JSON.stringify({
   options: { provinces: options.provinces.length, operators: options.operators.length, focusGroups: options.focusGroups.length },
   searches: { dataCenter: dataCenter.total, allZhejiang: allZhejiang.total, telecomBudget: telecomBudget.total, natural: natural.total, explicitRange: explicitRange.total, strictFocus: strictFocus.total, oneMonth: oneMonth.total, monthDay: monthDay.total, eightMonths: eightMonths.total }

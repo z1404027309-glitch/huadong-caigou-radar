@@ -376,7 +376,8 @@ function parseNaturalNoticeQuery(query, focusRules) {
     .filter((value) => value.length >= 2 && !genericQueryWords.has(value));
   const keywords = focusCategories.length ? [] : matchedFocusKeywords.length ? matchedFocusKeywords : extractedKeywords;
 
-  return { provinces, operators, noticeCategories, sourceCategories, focusCategories, keywords, publishStart, publishEnd, sort, limit: 10 };
+  const includeTelecomInquiry = /(?:中国)?电信/.test(query) && /询比/.test(query);
+  return { provinces, operators, noticeCategories, sourceCategories, focusCategories, keywords, publishStart, publishEnd, sort, includeTelecomInquiry, limit: 10 };
 }
 
 function naturalDateRange(query, today) {
@@ -511,11 +512,15 @@ function normalizeNoticeSearchFilters(body) {
   if (publishStart > publishEnd || (deadlineStart && deadlineEnd && deadlineStart > deadlineEnd)) {
     return { error: "invalid_date_range" };
   }
+  const operators = normalizeAllowedList(body.operators ?? body.operator, SUPPORTED_OPERATORS, normalizeOperator);
+  const sourceCategories = normalizeAllowedList(body.sourceCategories ?? body.sourceCategory, Object.values(NOTICE_CATEGORY_GROUPS).flat());
+  const includeTelecomInquiry = body.includeTelecomInquiry === true
+    || (operators.includes("中国电信") && sourceCategories.includes("询比公告"));
   return {
     provinces: normalizeAllowedList(body.provinces ?? body.province, SUPPORTED_PROVINCES, normalizeProvince),
-    operators: normalizeAllowedList(body.operators ?? body.operator, SUPPORTED_OPERATORS, normalizeOperator),
+    operators,
     noticeCategories: normalizeAllowedList(body.noticeCategories ?? body.noticeCategory, SUPPORTED_NOTICE_CATEGORIES),
-    sourceCategories: normalizeAllowedList(body.sourceCategories ?? body.sourceCategory, Object.values(NOTICE_CATEGORY_GROUPS).flat()),
+    sourceCategories,
     focusCategories: normalizeStringList(body.focusCategories ?? body.focusCategory, 10),
     keywords: normalizeStringList(body.keywords ?? body.keyword ?? body.q, 10),
     publishStart,
@@ -524,6 +529,7 @@ function normalizeNoticeSearchFilters(body) {
     deadlineEnd,
     budgetMin: normalizeBudgetFilter(body.budgetMin),
     budgetMax: normalizeBudgetFilter(body.budgetMax),
+    includeTelecomInquiry,
     sort: ["publishDate_desc", "publishDate_asc", "budget_desc", "deadline_asc"].includes(body.sort) ? body.sort : "publishDate_desc",
     limit: Math.min(50, Math.max(1, Number.parseInt(body.limit || "10", 10) || 10))
   };
@@ -557,6 +563,9 @@ function normalizeBudgetFilter(value) {
 
 function matchesStructuredNoticeSearch(item, filters, focusRules) {
   const province = String(item.region || item.province || "");
+  const telecomInquiry = item.operator === "中国电信"
+    && (item.sourceCategory === "询比公告" || item.detailCategory === "询比公告");
+  if (telecomInquiry && !filters.includeTelecomInquiry) return false;
   if (filters.provinces.length && !filters.provinces.includes(province)) return false;
   if (filters.operators.length && !filters.operators.includes(String(item.operator || ""))) return false;
   if (filters.noticeCategories.length && !filters.noticeCategories.includes(String(item.category || ""))) return false;
