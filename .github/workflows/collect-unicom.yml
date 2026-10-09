@@ -45,13 +45,76 @@ jobs:
           RESULT=$(curl --fail --silent --show-error "https://huadong-caigou-radar.pages.dev/api/refresh-needed")
           echo "$RESULT" | grep -q '"shouldRun":true' && echo "should_run=true" >> "$GITHUB_OUTPUT" || echo "should_run=false" >> "$GITHUB_OUTPUT"
 
-  collect:
+  collect_unicom:
     needs: check
     if: needs.check.outputs.should_run == 'true'
+    runs-on: windows-latest
+    outputs:
+      status: ${{ steps.result.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-package-lock
+      - name: Collect China Unicom in system Edge
+        id: unicom
+        if: inputs.mobile_pilot != true
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
+          if (-not (Test-Path -LiteralPath $edge)) { throw "Microsoft Edge is unavailable" }
+          $profile = Join-Path $env:RUNNER_TEMP "unicom-edge-profile"
+          $process = Start-Process -FilePath $edge -WindowStyle Hidden -PassThru -ArgumentList @(
+            "--remote-debugging-port=9222",
+            "--user-data-dir=$profile",
+            "--no-first-run",
+            "--no-default-browser-check",
+            "about:blank"
+          )
+          try {
+            $ready = $false
+            for ($attempt = 1; $attempt -le 30; $attempt++) {
+              try {
+                Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/version" | Out-Null
+                $ready = $true
+                break
+              } catch { Start-Sleep -Seconds 1 }
+            }
+            if (-not $ready) { throw "Edge remote debugging endpoint did not start" }
+            $env:UNICOM_CDP_ENDPOINT = "http://127.0.0.1:9222"
+            npm run collect:unicom
+            node scripts/validate-publication-source.mjs unicom
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+          }
+      - name: Record China Unicom result
+        id: result
+        if: always()
+        shell: pwsh
+        run: '"status=${{ steps.unicom.outcome }}" >> $env:GITHUB_OUTPUT'
+      - name: Preserve China Unicom archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unicom-notice-archive
+          path: public/data/unicom-notices.json
+          if-no-files-found: error
+          retention-days: 1
+
+  collect:
+    needs: [check, collect_unicom]
+    if: always() && needs.check.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Restore China Unicom archive
+        uses: actions/download-artifact@v4
+        with:
+          name: unicom-notice-archive
+          path: public/data
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -61,11 +124,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-chi-sim
       - run: npx playwright install --with-deps chromium
-      - name: Collect China Unicom
-        if: inputs.mobile_pilot != true
-        id: unicom
-        continue-on-error: true
-        run: xvfb-run --auto-servernum npm run collect:unicom && node scripts/validate-publication-source.mjs unicom
       - name: Collect China Mobile
         id: mobile
         continue-on-error: true
@@ -101,7 +159,7 @@ jobs:
         if: always() && steps.oidc.outcome == 'success'
         env:
           MOBILE_STATUS: ${{ steps.mobile.outcome }}
-          UNICOM_STATUS: ${{ steps.unicom.outcome }}
+          UNICOM_STATUS: ${{ needs.collect_unicom.outputs.status }}
           TOWER_STATUS: ${{ steps.tower.outcome }}
           TELECOM_STATUS: ${{ steps.telecom.outcome }}
         run: |
@@ -152,7 +210,7 @@ jobs:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
           BATCH_ID: ${{ github.run_id }}-${{ github.run_attempt }}
           MOBILE_STATUS: ${{ steps.mobile.outcome }}
-          UNICOM_STATUS: ${{ steps.unicom.outcome }}
+          UNICOM_STATUS: ${{ needs.collect_unicom.outputs.status }}
           TOWER_STATUS: ${{ steps.tower.outcome }}
           TELECOM_STATUS: ${{ steps.telecom.outcome }}
         run: |

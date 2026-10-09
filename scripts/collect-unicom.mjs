@@ -17,21 +17,24 @@ const CATEGORY_NAMES = { "022001": "采购需求公示", "022002": "招标公告
 
 const proxyServer = String(process.env.UNICOM_PROXY || "").trim();
 const executablePath = String(process.env.UNICOM_EXECUTABLE_PATH || "").trim();
+const cdpEndpoint = String(process.env.UNICOM_CDP_ENDPOINT || "").trim();
 // The Unicom entry verification rejects Playwright's headless/automation launch
 // profile. Keep a real browser window (or an Xvfb-backed one in CI).
 const headless = process.env.UNICOM_HEADLESS === "true";
-const browser = await chromium.launch({
-  headless,
-  args: ["--disable-blink-features=AutomationControlled"],
-  ignoreDefaultArgs: ["--enable-automation"],
-  ...(proxyServer ? { proxy: { server: proxyServer } } : {}),
-  ...(executablePath
-    ? { executablePath }
-    : process.platform === "win32" && process.env.CI !== "true" ? { channel: "msedge" } : {})
-});
-const context = await browser.newContext({
-  locale: "zh-CN"
-});
+const browser = cdpEndpoint
+  ? await chromium.connectOverCDP(cdpEndpoint)
+  : await chromium.launch({
+    headless,
+    args: ["--disable-blink-features=AutomationControlled"],
+    ignoreDefaultArgs: ["--enable-automation"],
+    ...(proxyServer ? { proxy: { server: proxyServer } } : {}),
+    ...(executablePath
+      ? { executablePath }
+      : process.platform === "win32" && process.env.CI !== "true" ? { channel: "msedge" } : {})
+  });
+const context = cdpEndpoint
+  ? browser.contexts()[0] || await browser.newContext({ locale: "zh-CN" })
+  : await browser.newContext({ locale: "zh-CN" });
 const page = await context.newPage();
 const cdp = await context.newCDPSession(page);
 await cdp.send("Debugger.setSkipAllPauses", { skip: true });

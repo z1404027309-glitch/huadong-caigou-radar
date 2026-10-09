@@ -20,5 +20,8 @@ assert(workflow.includes("https://huadong-caigou-radar.pages.dev/api/refresh-nee
 assert(!workflow.includes("https://huadong-caigou.z1404027309.chatgpt.site/api/refresh-needed"), "refresh polling must not use the legacy site database");
 assert(worker.includes("DELETE FROM notice_archive_staging WHERE batch_id = ?"), "completed publication batches must delete staged archive payloads");
 assert(worker.includes("pruneArchivePublicationHistory(env.DB, batchId)"), "archive sync must prune historical staging payloads before writing a new batch");
+assert(workflow.includes("runs-on: windows-latest"), "China Unicom collection must run in Windows system Edge");
+assert(workflow.includes("UNICOM_CDP_ENDPOINT"), "China Unicom collection must attach to the externally launched Edge session");
+assert(workflow.includes("actions/download-artifact@v4"), "the main publication job must restore the isolated China Unicom archive");
 
 console.log("collection workflow configuration is valid");
