@@ -28,6 +28,18 @@ const env = {
   }
 };
 
+let requestedRootAsset = "";
+const rootResponse = await worker.fetch(new Request("https://local.test/"), {
+  ASSETS: {
+    async fetch(request) {
+      requestedRootAsset = new URL(request.url).pathname;
+      return new Response("home", { status: 200 });
+    }
+  }
+});
+assert.equal(rootResponse.status, 200);
+assert.equal(requestedRootAsset, "/index.html", "root route must serve the exported homepage explicitly");
+
 async function search(body) {
   const response = await worker.fetch(new Request("https://local.test/api/notices/search", {
     method: "POST",
@@ -170,7 +182,7 @@ assert.deepEqual(retryHalfYearSmartApps.appliedFilters.focusCategories, ["智慧
 assert.deepEqual(retryHalfYearSmartApps.appliedFilters.keywords, []);
 assert.equal(retryHalfYearSmartApps.total, halfYearSmartApps.total);
 
-const digitalGovernmentResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("一个月内浙江数字政府公告")}&limit=10`), env);
+const digitalGovernmentResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("2026-08-01至2026-08-31浙江数字政府公告")}&limit=10`), env);
 const digitalGovernment = await digitalGovernmentResponse.json();
 assert.deepEqual(digitalGovernment.appliedFilters.focusCategories, ["数字政府"]);
 assert.deepEqual(digitalGovernment.appliedFilters.keywords, []);

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const workflow = fs.readFileSync(".github/workflows/collect-unicom.yml", "utf8");
+const worker = fs.readFileSync("server/index.js", "utf8");
 
 const forcedSchedules = [
   "15 0,4,8 * * *", // Beijing 08:15, 12:15, 16:15
@@ -17,5 +18,7 @@ assert(workflow.includes('- cron: "5-10/5,20-55/5 * * * *"'), "refresh polling m
 assert(!workflow.includes('- cron: "*/5 * * * *"'), "overlapping five-minute schedule must not return");
 assert(workflow.includes("https://huadong-caigou-radar.pages.dev/api/refresh-needed"), "refresh polling must use the production site database");
 assert(!workflow.includes("https://huadong-caigou.z1404027309.chatgpt.site/api/refresh-needed"), "refresh polling must not use the legacy site database");
+assert(worker.includes("DELETE FROM notice_archive_staging WHERE batch_id = ?"), "completed publication batches must delete staged archive payloads");
+assert(worker.includes("pruneArchivePublicationHistory(env.DB, batchId)"), "archive sync must prune historical staging payloads before writing a new batch");
 
 console.log("collection workflow configuration is valid");

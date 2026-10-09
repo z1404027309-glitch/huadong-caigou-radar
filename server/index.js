@@ -11,6 +11,9 @@ export default {
     if (url.pathname === "/api/document") return getDocument(url);
     if (url.pathname === "/api/focus-rules") return handleFocusRules(request, env);
     if (url.pathname === "/api/scoring-settings") return handleScoringSettings(request, env);
+    if (url.pathname === "/") {
+      return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
+    }
     if (url.pathname.includes("ort-wasm-simd-threaded.jsep") && url.pathname.endsWith(".wasm")) {
       const asset = await env.ASSETS.fetch(request);
       const headers = new Headers(asset.headers);
@@ -754,8 +757,10 @@ async function finishRefresh(request, env) {
     .bind(row.source, row.fetched_at, row.payload, completedAt));
   statements.push(env.DB.prepare("UPDATE notice_publication_batches SET status = 'completed', completed_at = ? WHERE batch_id = ?")
     .bind(completedAt, batchId));
+  statements.push(env.DB.prepare("DELETE FROM notice_archive_staging WHERE batch_id = ?").bind(batchId));
   if (job) statements.push(env.DB.prepare("UPDATE refresh_jobs SET status = 'completed' WHERE id = ?").bind(job.id));
   await env.DB.batch(statements);
+  await pruneArchivePublicationHistory(env.DB, batchId);
   return json({ success: true, status: "completed", batchId, failedSources, reusedSources }, 200, "no-store");
 }
 
@@ -783,6 +788,7 @@ async function syncNoticeArchive(request, env) {
   }
   const fetchedAt = String(archive.fetchedAt || new Date().toISOString());
   await ensureArchiveSchema(env.DB);
+  await pruneArchivePublicationHistory(env.DB, batchId);
   const updatedAt = new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO notice_publication_batches (batch_id, status, created_at, completed_at)
@@ -822,6 +828,20 @@ async function ensureArchiveSchema(db) {
       updated_at TEXT NOT NULL,
       PRIMARY KEY (batch_id, source)
     )`)
+  ]);
+}
+
+async function pruneArchivePublicationHistory(db, currentBatchId = "") {
+  const staleBefore = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+  await db.batch([
+    db.prepare(`DELETE FROM notice_archive_staging
+      WHERE batch_id != ? AND batch_id IN (
+        SELECT batch_id FROM notice_publication_batches
+        WHERE status = 'completed' OR created_at < ?
+      )`).bind(currentBatchId, staleBefore),
+    db.prepare(`DELETE FROM notice_publication_batches
+      WHERE batch_id != ? AND (status = 'completed' OR created_at < ?)`)
+      .bind(currentBatchId, staleBefore)
   ]);
 }
 
