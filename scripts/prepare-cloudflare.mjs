@@ -3,6 +3,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 
 fs.copyFileSync("server/index.js", "out/_worker.js");
+fs.copyFileSync("out/index.html", "out/__homepage.txt");
 
 for (const file of walk("out")) {
   if (!/ort-wasm-simd-threaded\.jsep\..+\.wasm$/.test(file)) continue;

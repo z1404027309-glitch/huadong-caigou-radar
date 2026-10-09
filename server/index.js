@@ -12,7 +12,10 @@ export default {
     if (url.pathname === "/api/focus-rules") return handleFocusRules(request, env);
     if (url.pathname === "/api/scoring-settings") return handleScoringSettings(request, env);
     if (url.pathname === "/") {
-      return env.ASSETS.fetch(new Request(new URL("/index.html", url)));
+      const homepage = await env.ASSETS.fetch(new Request(new URL("/__homepage.txt", url)));
+      const headers = new Headers(homepage.headers);
+      headers.set("content-type", "text/html; charset=utf-8");
+      return new Response(homepage.body, { status: homepage.status, headers });
     }
     if (url.pathname.includes("ort-wasm-simd-threaded.jsep") && url.pathname.endsWith(".wasm")) {
       const asset = await env.ASSETS.fetch(request);

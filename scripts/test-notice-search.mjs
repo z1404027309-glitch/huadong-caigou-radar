@@ -38,7 +38,8 @@ const rootResponse = await worker.fetch(new Request("https://local.test/"), {
   }
 });
 assert.equal(rootResponse.status, 200);
-assert.equal(requestedRootAsset, "/index.html", "root route must serve the exported homepage explicitly");
+assert.equal(rootResponse.headers.get("content-type"), "text/html; charset=utf-8");
+assert.equal(requestedRootAsset, "/__homepage.txt", "root route must serve the non-redirecting homepage asset explicitly");
 
 async function search(body) {
   const response = await worker.fetch(new Request("https://local.test/api/notices/search", {
