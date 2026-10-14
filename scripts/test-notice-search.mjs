@@ -285,12 +285,12 @@ for (const query of ["今天福建江西浙江运营商招标项目", "今天三
 
 const broadProcurementResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("今天三省运营商招采公告")}&limit=50`), env);
 const broadProcurement = await broadProcurementResponse.json();
-assert.deepEqual(broadProcurement.appliedFilters.noticeCategories, ["招采公告"]);
+assert.deepEqual(broadProcurement.appliedFilters.noticeCategories, ["招采公告", "采购需求"]);
 assert.deepEqual(broadProcurement.appliedFilters.sourceCategories, []);
 
 const broadTenderProcurementResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("今天三省运营商招标采购公告")}&limit=50`), env);
 const broadTenderProcurement = await broadTenderProcurementResponse.json();
-assert.deepEqual(broadTenderProcurement.appliedFilters.noticeCategories, ["招采公告"]);
+assert.deepEqual(broadTenderProcurement.appliedFilters.noticeCategories, ["招采公告", "采购需求"]);
 assert.deepEqual(broadTenderProcurement.appliedFilters.sourceCategories, []);
 
 for (const naturalPhrase of [
@@ -303,7 +303,7 @@ for (const naturalPhrase of [
   const result = await response.json();
   assert.deepEqual(result.appliedFilters.provinces, ["福建"], naturalPhrase);
   assert.deepEqual(result.appliedFilters.operators, ["中国移动"], naturalPhrase);
-  assert.deepEqual(result.appliedFilters.noticeCategories, ["招采公告"], naturalPhrase);
+  assert.deepEqual(result.appliedFilters.noticeCategories, ["招采公告", "采购需求"], naturalPhrase);
   assert.deepEqual(result.appliedFilters.sourceCategories, [], naturalPhrase);
   assert.deepEqual(result.appliedFilters.keywords, [], naturalPhrase);
   assert.equal(result.appliedFilters.publishStart, "2026-08-14", naturalPhrase);
@@ -322,10 +322,11 @@ assert.equal(provinceBranch.total, 4);
 assert(provinceBranch.items.every((item) => item.province === "浙江"));
 
 const categoryMatrix = [
-  ["招采公告", "招采公告", []],
-  ["招标采购公告", "招采公告", []],
+  ["招采公告", ["招采公告", "采购需求"], []],
+  ["招标采购公告", ["招采公告", "采购需求"], []],
   ["询比公告", "招采公告", ["询比公告"]],
   ["采购需求", "采购需求", []],
+  ["需求公告", "采购需求", []],
   ["预公告", "预公告", []],
   ["招标公告", "招采公告", ["招标公告"]],
   ["采购公告", "招采公告", ["采购公告"]],
@@ -343,13 +344,18 @@ for (const [queryCategory, expectedCategory, expectedSources] of categoryMatrix)
   const response = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent(`三省四家运营商近8个月${queryCategory}信息`)}&limit=50`), env);
   const result = await response.json();
   assert.deepEqual(result.appliedFilters.provinces, ["浙江", "江西", "福建"], queryCategory);
-  assert.deepEqual(result.appliedFilters.noticeCategories, [expectedCategory], queryCategory);
+  const expectedCategories = Array.isArray(expectedCategory) ? expectedCategory : [expectedCategory];
+  assert.deepEqual(result.appliedFilters.noticeCategories, expectedCategories, queryCategory);
   assert.deepEqual(result.appliedFilters.sourceCategories, expectedSources, queryCategory);
   assert.deepEqual(result.appliedFilters.keywords, [], queryCategory);
-  assert(result.items.every((item) => item.category === expectedCategory), `${queryCategory}: mixed total category`);
+  assert(result.items.every((item) => expectedCategories.includes(item.category)), `${queryCategory}: mixed total category`);
   if (expectedSources.length) {
-    assert(result.items.every((item) => expectedSources.includes(item.sourceCategory) || expectedSources.includes(item.detailCategory)), `${queryCategory}: mixed fine category`);
+    assert(result.items.every((item) => item.category === "采购需求"
+      ? item.sourceCategory === "需求公告" && item.detailCategory === "需求公告"
+      : expectedSources.includes(item.sourceCategory) || expectedSources.includes(item.detailCategory)), `${queryCategory}: mixed fine category`);
   }
+  assert(result.items.filter((item) => item.category === "采购需求")
+    .every((item) => item.sourceCategory === "需求公告" && item.detailCategory === "需求公告"), `${queryCategory}: demand display category`);
 }
 
 const mobileProcurementFixture = {
