@@ -294,6 +294,14 @@ assert.deepEqual(broadProcurementProject.appliedFilters.noticeCategories, ["招�
 assert.deepEqual(broadProcurementProject.appliedFilters.sourceCategories, []);
 assert.deepEqual(broadProcurementProject.appliedFilters.keywords, []);
 
+for (const broadPhrase of ["招采", "招采汇总", "招采清单", "招采资讯"]) {
+  const response = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent(`三省运营商昨天${broadPhrase}`)}&limit=50`), env);
+  const result = await response.json();
+  assert.deepEqual(result.appliedFilters.noticeCategories, ["招采公告", "采购需求"], broadPhrase);
+  assert.deepEqual(result.appliedFilters.sourceCategories, [], broadPhrase);
+  assert.deepEqual(result.appliedFilters.keywords, [], broadPhrase);
+}
+
 const broadTenderProcurementResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("今天三省运营商招标采购公告")}&limit=50`), env);
 const broadTenderProcurement = await broadTenderProcurementResponse.json();
 assert.deepEqual(broadTenderProcurement.appliedFilters.noticeCategories, ["招采公告", "采购需求"]);

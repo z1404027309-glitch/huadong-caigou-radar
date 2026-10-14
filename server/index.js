@@ -320,9 +320,9 @@ function parseNaturalNoticeQuery(query, focusRules) {
   const today = new Date().toISOString().slice(0, 10);
   const provinces = /三省/.test(query) ? [...SUPPORTED_PROVINCES] : SUPPORTED_PROVINCES.filter((province) => query.includes(province));
   const operators = SUPPORTED_OPERATORS.filter((operator) => query.includes(operator) || query.includes(operator.replace("中国", "")));
-  const broadProcurementQuery = /招采(?:公告|信息|资讯|项目)|招标采购(?:公告|信息|资讯)|采购招标(?:公告|信息|资讯)|招投标(?:公告|信息|资讯)/.test(query);
+  const broadProcurementQuery = /招采|招标采购(?:公告|信息|资讯)|采购招标(?:公告|信息|资讯)|招投标(?:公告|信息|资讯)/.test(query);
   const noticeCategoryAliases = [
-    ["招采公告", /招采(?:公告|信息|资讯|项目)|招标采购(?:公告|信息|资讯)|采购招标(?:公告|信息|资讯)|招投标(?:公告|信息|资讯)|招标|采购公告|直接采购|单一来源|询比|询价|比选/],
+    ["招采公告", /招采|招标采购(?:公告|信息|资讯)|采购招标(?:公告|信息|资讯)|招投标(?:公告|信息|资讯)|招标|采购公告|直接采购|单一来源|询比|询价|比选/],
     ["采购需求", /采购需求|需求公告|意见征求|征求意见|需求公示/],
     ["预公告", /预公告|资格预审/]
   ];
@@ -364,7 +364,7 @@ function parseNaturalNoticeQuery(query, focusRules) {
     ...SUPPORTED_OPERATORS.flatMap((value) => [value, value.replace("中国", "")]),
     ...SUPPORTED_NOTICE_CATEGORIES,
     ...Object.values(NOTICE_CATEGORY_GROUPS).flat(),
-    "招采信息", "招采资讯", "招采项目", "招标采购信息", "招标采购资讯", "采购招标公告", "采购招标信息", "采购招标资讯", "招投标信息", "招投标资讯",
+    "招采信息", "招采资讯", "招采项目", "招采", "招标采购信息", "招标采购资讯", "采购招标公告", "采购招标信息", "采购招标资讯", "招投标信息", "招投标资讯",
     "直接采购", "单一来源", "需求公告", "意见征求", "征求意见", "需求公示", "询比", "询价", "比选", "招标", "资格预审", "项目预公告", "采购预公告",
     ...focusRules.flatMap((rule) => [rule.name, rule.groupName, ...rule.keywords]),
     "按预算排序", "按金额排序", "按截止时间排序", "按截止日期排序", "按发布时间排序", "按发布日期排序", "从高到低", "从低到高", "从早到晚", "从晚到早", "降序", "升序", "三省", "所有运营商", "全部运营商", "四家运营商", "运营商", "挂网", "公告", "项目", "采购", "发布", "查询", "搜索", "查找", "查一下", "帮我查", "看看", "重新查询", "重新搜索", "重新查找", "重新查", "再查询", "再搜索", "再查一次", "重查", "关于", "有关", "相关", "方面", "一批",
