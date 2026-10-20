@@ -219,6 +219,7 @@ async function ensureFocusSchema(db) {
 
 const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryDetail";
 const ARCHIVE_SOURCES = ["mobile", "unicom", "tower", "telecom"];
+const ARCHIVE_CHUNK_SIZE = 200000;
 const SUPPORTED_PROVINCES = ["浙江", "江西", "福建"];
 const SUPPORTED_OPERATORS = ["中国移动", "中国联通", "中国铁塔", "中国电信"];
 const NOTICE_CATEGORY_GROUPS = {
@@ -755,13 +756,24 @@ async function finishRefresh(request, env) {
   }
 
   const completedAt = new Date().toISOString();
-  const statements = rows.map((row) => env.DB.prepare(`INSERT INTO notice_archives (source, fetched_at, payload, updated_at)
-    VALUES (?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET
-    fetched_at = excluded.fetched_at, payload = excluded.payload, updated_at = excluded.updated_at`)
-    .bind(row.source, row.fetched_at, row.payload, completedAt));
+  const statements = [];
+  for (const row of rows) {
+    if (reusedSources.includes(row.source)) continue;
+    statements.push(env.DB.prepare(`INSERT INTO notice_archives (source, fetched_at, payload, updated_at)
+      VALUES (?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET
+      fetched_at = excluded.fetched_at, payload = excluded.payload, updated_at = excluded.updated_at`)
+      .bind(row.source, row.fetched_at, row.payload, completedAt));
+    statements.push(env.DB.prepare("DELETE FROM notice_archive_chunks WHERE source = ?").bind(row.source));
+    if (archiveChunkMarker(row.payload)) {
+      statements.push(env.DB.prepare(`INSERT INTO notice_archive_chunks (source, chunk_index, payload)
+        SELECT source, chunk_index, payload FROM notice_archive_staging_chunks
+        WHERE batch_id = ? AND source = ? ORDER BY chunk_index`).bind(batchId, row.source));
+    }
+  }
   statements.push(env.DB.prepare("UPDATE notice_publication_batches SET status = 'completed', completed_at = ? WHERE batch_id = ?")
     .bind(completedAt, batchId));
   statements.push(env.DB.prepare("DELETE FROM notice_archive_staging WHERE batch_id = ?").bind(batchId));
+  statements.push(env.DB.prepare("DELETE FROM notice_archive_staging_chunks WHERE batch_id = ?").bind(batchId));
   if (job) statements.push(env.DB.prepare("UPDATE refresh_jobs SET status = 'completed' WHERE id = ?").bind(job.id));
   await env.DB.batch(statements);
   await pruneArchivePublicationHistory(env.DB, batchId);
@@ -791,16 +803,23 @@ async function syncNoticeArchive(request, env) {
     return json({ error: "invalid_archive" }, 400, "no-store");
   }
   const fetchedAt = String(archive.fetchedAt || new Date().toISOString());
+  const payload = JSON.stringify({ ...archive, fetchedAt });
+  const chunks = splitArchivePayload(payload);
+  const marker = JSON.stringify({ chunked: true, chunks: chunks.length });
   await ensureArchiveSchema(env.DB);
   await pruneArchivePublicationHistory(env.DB, batchId);
   const updatedAt = new Date().toISOString();
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO notice_publication_batches (batch_id, status, created_at, completed_at)
       VALUES (?, 'pending', ?, NULL) ON CONFLICT(batch_id) DO NOTHING`).bind(batchId, updatedAt),
+    env.DB.prepare("DELETE FROM notice_archive_staging_chunks WHERE batch_id = ? AND source = ?").bind(batchId, source),
     env.DB.prepare(`INSERT INTO notice_archive_staging (batch_id, source, fetched_at, payload, updated_at)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(batch_id, source) DO UPDATE SET
       fetched_at = excluded.fetched_at, payload = excluded.payload, updated_at = excluded.updated_at`)
-      .bind(batchId, source, fetchedAt, JSON.stringify({ ...archive, fetchedAt }), updatedAt)
+      .bind(batchId, source, fetchedAt, marker, updatedAt),
+    ...chunks.map((chunk, index) => env.DB.prepare(`INSERT INTO notice_archive_staging_chunks
+      (batch_id, source, chunk_index, payload) VALUES (?, ?, ?, ?)`)
+      .bind(batchId, source, index, chunk))
   ]);
   return json({ success: true, status: "pending", batchId, source, fetchedAt, count: archive.notices.length }, 200, "no-store");
 }
@@ -831,6 +850,19 @@ async function ensureArchiveSchema(db) {
       payload TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (batch_id, source)
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS notice_archive_chunks (
+      source TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      PRIMARY KEY (source, chunk_index)
+    )`),
+    db.prepare(`CREATE TABLE IF NOT EXISTS notice_archive_staging_chunks (
+      batch_id TEXT NOT NULL,
+      source TEXT NOT NULL,
+      chunk_index INTEGER NOT NULL,
+      payload TEXT NOT NULL,
+      PRIMARY KEY (batch_id, source, chunk_index)
     )`)
   ]);
 }
@@ -838,6 +870,11 @@ async function ensureArchiveSchema(db) {
 async function pruneArchivePublicationHistory(db, currentBatchId = "") {
   const staleBefore = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
   await db.batch([
+    db.prepare(`DELETE FROM notice_archive_staging_chunks
+      WHERE batch_id != ? AND batch_id IN (
+        SELECT batch_id FROM notice_publication_batches
+        WHERE status = 'completed' OR created_at < ?
+      )`).bind(currentBatchId, staleBefore),
     db.prepare(`DELETE FROM notice_archive_staging
       WHERE batch_id != ? AND batch_id IN (
         SELECT batch_id FROM notice_publication_batches
@@ -859,9 +896,37 @@ async function readStoredArchives(env) {
   const result = await env.DB.prepare("SELECT source, payload FROM notice_archives").all();
   const archives = {};
   for (const row of result.results || []) {
-    try { archives[row.source] = JSON.parse(row.payload); } catch {}
+    try {
+      const marker = archiveChunkMarker(row.payload);
+      if (!marker) {
+        archives[row.source] = JSON.parse(row.payload);
+        continue;
+      }
+      const chunkResult = await env.DB.prepare(`SELECT payload FROM notice_archive_chunks
+        WHERE source = ? ORDER BY chunk_index`).bind(row.source).all();
+      const chunks = chunkResult.results || [];
+      if (chunks.length !== marker.chunks) continue;
+      archives[row.source] = JSON.parse(chunks.map((chunk) => chunk.payload).join(""));
+    } catch {}
   }
   return archives;
+}
+
+function splitArchivePayload(payload) {
+  const chunks = [];
+  for (let index = 0; index < payload.length; index += ARCHIVE_CHUNK_SIZE) {
+    chunks.push(payload.slice(index, index + ARCHIVE_CHUNK_SIZE));
+  }
+  return chunks.length ? chunks : [""];
+}
+
+function archiveChunkMarker(payload) {
+  try {
+    const parsed = JSON.parse(String(payload || ""));
+    return parsed?.chunked === true && Number.isInteger(parsed.chunks) && parsed.chunks > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 async function completeRefreshJobs(db) {

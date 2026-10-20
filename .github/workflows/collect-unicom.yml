@@ -42,8 +42,13 @@ jobs:
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          RESULT=$(curl --fail --silent --show-error "https://huadong-caigou-radar.pages.dev/api/refresh-needed")
-          echo "$RESULT" | grep -q '"shouldRun":true' && echo "should_run=true" >> "$GITHUB_OUTPUT" || echo "should_run=false" >> "$GITHUB_OUTPUT"
+          if RESULT=$(curl --fail --silent --show-error --retry 3 --retry-all-errors --max-time 20 \
+            "https://huadong-caigou-radar.pages.dev/api/refresh-needed"); then
+            echo "$RESULT" | grep -q '"shouldRun":true' && echo "should_run=true" >> "$GITHUB_OUTPUT" || echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Refresh check endpoint is unavailable; running collection as a safe fallback"
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
 
   collect_unicom:
     needs: check
