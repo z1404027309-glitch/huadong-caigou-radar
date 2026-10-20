@@ -120,6 +120,14 @@ assert.equal(chineseDate.appliedFilters.publishEnd, "2026-08-04");
 assert.deepEqual(chineseDate.appliedFilters.keywords, []);
 assert.equal(chineseDate.appliedFilters.limit, 50, "natural-language searches must return the full single-response maximum by default");
 
+const legacySmallLimitResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("三省运营商昨天招采项目")}&limit=2`), env);
+const legacySmallLimit = await legacySmallLimitResponse.json();
+assert.equal(legacySmallLimit.appliedFilters.limit, 50, "legacy Enterprise WeChat limits must not truncate natural-language results");
+
+const explicitPreviewResponse = await worker.fetch(new Request(`https://local.test/api/notices/search?query=${encodeURIComponent("三省运营商昨天招采项目")}&limit=2&truncate=true`), env);
+const explicitPreview = await explicitPreviewResponse.json();
+assert.equal(explicitPreview.appliedFilters.limit, 2, "preview callers may explicitly opt into truncation");
+
 const defaultPostLimit = await search({ publishStart: "2026-08-01", publishEnd: "2026-08-11" });
 assert.equal(defaultPostLimit.appliedFilters.limit, 50, "structured searches must return the full single-response maximum by default");
 

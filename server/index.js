@@ -288,7 +288,14 @@ async function searchNotices(request, url, env) {
   if (request.method === "GET") {
     const query = String(url.searchParams.get("query") || url.searchParams.get("q") || "").trim();
     body = parseNaturalNoticeQuery(query, focusRules);
-    if (url.searchParams.has("limit")) body.limit = url.searchParams.get("limit");
+    // Enterprise WeChat asks natural-language questions and expects the complete
+    // result set.  Older workflow revisions supplied small default limits (for
+    // example 2 or 10), which silently truncated an otherwise correct search.
+    // Keep natural-language searches complete unless a caller explicitly opts
+    // into truncation for a preview UI.
+    if (url.searchParams.get("truncate") === "true" && url.searchParams.has("limit")) {
+      body.limit = url.searchParams.get("limit");
+    }
   } else {
     body = await request.json().catch(() => null);
     if (!body || typeof body !== "object" || Array.isArray(body)) {
