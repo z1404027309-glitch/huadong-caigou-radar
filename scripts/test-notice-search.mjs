@@ -118,6 +118,10 @@ const chineseDate = await chineseDateResponse.json();
 assert.equal(chineseDate.appliedFilters.publishStart, "2026-08-04");
 assert.equal(chineseDate.appliedFilters.publishEnd, "2026-08-04");
 assert.deepEqual(chineseDate.appliedFilters.keywords, []);
+assert.equal(chineseDate.appliedFilters.limit, 50, "natural-language searches must return the full single-response maximum by default");
+
+const defaultPostLimit = await search({ publishStart: "2026-08-01", publishEnd: "2026-08-11" });
+assert.equal(defaultPostLimit.appliedFilters.limit, 50, "structured searches must return the full single-response maximum by default");
 
 const strictFocusResponse = await worker.fetch(new Request("https://local.test/api/notices/search?query=%E7%A6%8F%E5%BB%BA%E6%9C%AC%E6%9C%88%E6%95%B0%E6%8D%AE%E4%B8%AD%E5%BF%83"), env);
 const strictFocus = await strictFocusResponse.json();

@@ -385,7 +385,7 @@ function parseNaturalNoticeQuery(query, focusRules) {
   const keywords = focusCategories.length ? [] : matchedFocusKeywords.length ? matchedFocusKeywords : extractedKeywords;
 
   const includeTelecomInquiry = /(?:中国)?电信/.test(query) && /询比/.test(query);
-  return { provinces, operators, noticeCategories, sourceCategories, focusCategories, keywords, publishStart, publishEnd, sort, includeTelecomInquiry, limit: 10 };
+  return { provinces, operators, noticeCategories, sourceCategories, focusCategories, keywords, publishStart, publishEnd, sort, includeTelecomInquiry, limit: 50 };
 }
 
 function naturalDateRange(query, today) {
@@ -539,7 +539,7 @@ function normalizeNoticeSearchFilters(body) {
     budgetMax: normalizeBudgetFilter(body.budgetMax),
     includeTelecomInquiry,
     sort: ["publishDate_desc", "publishDate_asc", "budget_desc", "deadline_asc"].includes(body.sort) ? body.sort : "publishDate_desc",
-    limit: Math.min(50, Math.max(1, Number.parseInt(body.limit || "10", 10) || 10))
+    limit: Math.min(50, Math.max(1, Number.parseInt(body.limit || "50", 10) || 50))
   };
 }
 

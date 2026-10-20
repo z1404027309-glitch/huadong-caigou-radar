@@ -14,7 +14,7 @@ for (const schedule of forcedSchedules) {
   assert(workflow.includes(`[ "$EVENT_SCHEDULE" = "${schedule}" ]`), `schedule is not forced: ${schedule}`);
 }
 
-assert(workflow.includes('- cron: "5-10/5,20-55/5 * * * *"'), "refresh polling must exclude minutes 00 and 15");
+assert(workflow.includes('- cron: "5,10,20,25,30,35,40,45,50,55 * * * *"'), "refresh polling must explicitly exclude minutes 00 and 15");
 assert(!workflow.includes('- cron: "*/5 * * * *"'), "overlapping five-minute schedule must not return");
 assert(workflow.includes("https://huadong-caigou-radar.pages.dev/api/refresh-needed"), "refresh polling must use the production site database");
 assert(!workflow.includes("https://huadong-caigou.z1404027309.chatgpt.site/api/refresh-needed"), "refresh polling must not use the legacy site database");
