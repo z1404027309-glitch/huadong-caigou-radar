@@ -8,7 +8,7 @@ on:
     - cron: "0 13,15 * * *"
     # Poll refresh requests every five minutes, excluding minutes 00 and 15
     # so a polling event can never overlap a forced collection event.
-    - cron: "5-10/5,20-55/5 * * * *"
+    - cron: "5,10,20,25,30,35,40,45,50,55 * * * *"
   workflow_dispatch:
     inputs:
       mobile_pilot:
