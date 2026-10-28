@@ -14,6 +14,7 @@ const LIST_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/pu
 const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryDetail";
 const REGIONS = ["浙江", "江西", "福建"];
 const KEEP_DAYS = Number(process.env.MOBILE_KEEP_DAYS || 365);
+const FETCH_DAYS = Number(process.env.MOBILE_FETCH_DAYS || 7);
 const ONLY_SOURCE_ID = String(process.env.MOBILE_ONLY_SOURCE_ID || "").trim();
 const BACKFILL_PROVINCE = String(process.env.MOBILE_BACKFILL_PROVINCE || "").trim();
 const BACKFILL_DAYS = Number(process.env.MOBILE_BACKFILL_DAYS || 0);
@@ -37,6 +38,7 @@ let mobilePage;
 const existing = await readArchive();
 const endDate = new Date().toISOString().slice(0, 10);
 const startDate = new Date(Date.now() - KEEP_DAYS * 86400000).toISOString().slice(0, 10);
+const fetchStartDate = new Date(Date.now() - FETCH_DAYS * 86400000).toISOString().slice(0, 10);
 const collected = [];
 const backfillEnabled = Boolean(BACKFILL_PROVINCE && BACKFILL_DAYS > 0 && BACKFILL_TITLE);
 
@@ -81,7 +83,7 @@ for (const config of ONLY_SOURCE_ID || backfillEnabled ? [] : CATEGORIES) {
     if (!records.length) break;
     for (const item of records) {
       const date = String(item.publishDate || "").slice(0, 10);
-      if (date && date < startDate) {
+      if (date && date < fetchStartDate) {
         reachedStart = true;
         continue;
       }
@@ -109,7 +111,7 @@ if (!ONLY_SOURCE_ID && !backfillEnabled && RETRY_UNRESOLVED_LIMIT > 0) {
   const attempted = new Set(collected.map((item) => String(item.sourceId)));
   const unresolved = existing.notices
     .filter((item) => item.fieldsReady !== true)
-    .filter((item) => !item.date || item.date >= startDate)
+    .filter((item) => !item.date || item.date >= fetchStartDate)
     .filter((item) => item.publishId && item.publishUuid)
     .filter((item) => !attempted.has(String(item.sourceId)))
     .slice(0, RETRY_UNRESOLVED_LIMIT);

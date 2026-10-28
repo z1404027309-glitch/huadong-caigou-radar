@@ -28,5 +28,6 @@ assert(workflow.includes("Request archive download identity"), "China Mobile arc
 assert(workflow.includes("/api/notices/archive?source=mobile"), "China Mobile collection must start from the current production archive");
 assert(mobileCollector.includes("mobile API returned 403; switching to a same-origin Chromium session"), "China Mobile collection must fall back to a real browser after an API 403");
 assert(mobileCollector.includes("credentials: \"include\""), "China Mobile browser requests must preserve same-origin cookies");
+assert(mobileCollector.includes("MOBILE_FETCH_DAYS || 7"), "China Mobile daily collection must only scan the recent incremental window");
 
 console.log("collection workflow configuration is valid");
