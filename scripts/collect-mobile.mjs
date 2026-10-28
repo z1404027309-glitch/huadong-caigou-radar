@@ -5,6 +5,7 @@ import os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { constants as cryptoConstants } from "node:crypto";
+import { chromium } from "playwright";
 import { extractDeadline as extractUnifiedDeadline, textAttachmentsFromDetail } from "./lib/deadline-extractor.mjs";
 import { extractCommonNoticeFields } from "./lib/notice-field-extractor.mjs";
 
@@ -29,6 +30,9 @@ const legacyAgent = new https.Agent({ secureOptions: cryptoConstants.SSL_OP_LEGA
 const REQUEST_RETRIES = Number(process.env.MOBILE_REQUEST_RETRIES || 6);
 const execFileAsync = promisify(execFile);
 let ocrAttempts = 0;
+let browserRequired = false;
+let mobileBrowser;
+let mobilePage;
 
 const existing = await readArchive();
 const endDate = new Date().toISOString().slice(0, 10);
@@ -234,6 +238,7 @@ await fs.writeFile(OUTPUT, `${JSON.stringify({
   notices
 }, null, 2)}\n`, "utf8");
 console.log(`saved ${notices.length} notices to ${OUTPUT}`);
+await closeMobileBrowser();
 
 async function fetchList(current, config) {
   const payload = await postJson(LIST_API, {
@@ -276,6 +281,7 @@ async function postJson(url, headers, body) {
 }
 
 function postJsonOnce(url, headers, body) {
+  if (browserRequired) return postJsonInBrowser(url, body);
   const data = JSON.stringify(body);
   return new Promise((resolve, reject) => {
     const request = https.request(url, {
@@ -288,7 +294,13 @@ function postJsonOnce(url, headers, body) {
       response.on("data", (chunk) => chunks.push(chunk));
       response.on("end", () => {
         const text = Buffer.concat(chunks).toString("utf8");
-        if ((response.statusCode || 500) >= 400) return reject(new Error(`mobile list ${response.statusCode}`));
+        if (response.statusCode === 403) {
+          browserRequired = true;
+          console.warn("mobile API returned 403; switching to a same-origin Chromium session");
+          postJsonInBrowser(url, body).then(resolve, reject);
+          return;
+        }
+        if ((response.statusCode || 500) >= 400) return reject(new Error(`mobile API ${response.statusCode}`));
         try { resolve(JSON.parse(text)); } catch { reject(new Error("mobile list returned invalid JSON")); }
       });
     });
@@ -296,6 +308,54 @@ function postJsonOnce(url, headers, body) {
     request.setTimeout(30000, () => request.destroy(new Error("mobile list timeout")));
     request.end(data);
   });
+}
+
+async function postJsonInBrowser(url, body) {
+  const page = await getMobilePage();
+  const result = await page.evaluate(async ({ apiUrl, payload }) => {
+    const response = await fetch(apiUrl, {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        accept: "application/json, text/plain, */*",
+        "content-type": "application/json",
+        processInstId: "-1",
+        userLoginName: "-1"
+      },
+      body: JSON.stringify(payload)
+    });
+    return { status: response.status, text: await response.text() };
+  }, { apiUrl: url, payload: body });
+  if (result.status >= 400) throw new Error(`mobile browser API ${result.status}`);
+  try {
+    return JSON.parse(result.text);
+  } catch {
+    throw new Error("mobile browser API returned invalid JSON");
+  }
+}
+
+async function getMobilePage() {
+  if (mobilePage && !mobilePage.isClosed()) return mobilePage;
+  mobileBrowser = await chromium.launch({ headless: true });
+  const context = await mobileBrowser.newContext({
+    locale: "zh-CN",
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
+  });
+  mobilePage = await context.newPage();
+  mobilePage.setDefaultTimeout(120000);
+  await mobilePage.goto("https://b2b.10086.cn/b2b/main/listVendorNotice.html?noticeType=2#/biddingProcurementBulletin", {
+    waitUntil: "domcontentloaded",
+    timeout: 120000
+  });
+  await mobilePage.waitForTimeout(1500);
+  return mobilePage;
+}
+
+async function closeMobileBrowser() {
+  if (!mobileBrowser) return;
+  await mobileBrowser.close().catch(() => {});
+  mobileBrowser = undefined;
+  mobilePage = undefined;
 }
 
 function toNotice(item) {

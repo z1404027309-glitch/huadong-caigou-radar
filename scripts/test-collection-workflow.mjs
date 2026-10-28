@@ -3,6 +3,7 @@ import fs from "node:fs";
 
 const workflow = fs.readFileSync(".github/workflows/collect-unicom.yml", "utf8");
 const worker = fs.readFileSync("server/index.js", "utf8");
+const mobileCollector = fs.readFileSync("scripts/collect-mobile.mjs", "utf8");
 
 const forcedSchedules = [
   "15 0,4,8 * * *", // Beijing 08:15, 12:15, 16:15
@@ -23,5 +24,7 @@ assert(worker.includes("pruneArchivePublicationHistory(env.DB, batchId)"), "arch
 assert(workflow.includes("runs-on: windows-latest"), "China Unicom collection must run in Windows system Edge");
 assert(workflow.includes("UNICOM_CDP_ENDPOINT"), "China Unicom collection must attach to the externally launched Edge session");
 assert(workflow.includes("actions/download-artifact@v4"), "the main publication job must restore the isolated China Unicom archive");
+assert(mobileCollector.includes("mobile API returned 403; switching to a same-origin Chromium session"), "China Mobile collection must fall back to a real browser after an API 403");
+assert(mobileCollector.includes("credentials: \"include\""), "China Mobile browser requests must preserve same-origin cookies");
 
 console.log("collection workflow configuration is valid");
