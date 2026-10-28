@@ -129,6 +129,21 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-chi-sim
       - run: npx playwright install --with-deps chromium
+      - name: Request archive download identity
+        id: archive_oidc
+        run: |
+          TOKEN=$(curl --fail --silent --show-error -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=huadong-caigou-radar" | jq -r .value)
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+      - name: Restore current China Mobile production archive
+        if: inputs.mobile_pilot != true
+        env:
+          OIDC_TOKEN: ${{ steps.archive_oidc.outputs.token }}
+        run: |
+          curl --fail --silent --show-error --retry 3 --retry-all-errors --max-time 120 \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            "https://huadong-caigou-radar.pages.dev/api/notices/archive?source=mobile" \
+            --output public/data/mobile-notices.json
+          node scripts/validate-publication-source.mjs mobile
       - name: Collect China Mobile
         id: mobile
         continue-on-error: true

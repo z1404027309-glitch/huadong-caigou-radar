@@ -24,6 +24,8 @@ assert(worker.includes("pruneArchivePublicationHistory(env.DB, batchId)"), "arch
 assert(workflow.includes("runs-on: windows-latest"), "China Unicom collection must run in Windows system Edge");
 assert(workflow.includes("UNICOM_CDP_ENDPOINT"), "China Unicom collection must attach to the externally launched Edge session");
 assert(workflow.includes("actions/download-artifact@v4"), "the main publication job must restore the isolated China Unicom archive");
+assert(workflow.includes("Request archive download identity"), "China Mobile archive restore must use a short-lived OIDC identity");
+assert(workflow.includes("/api/notices/archive?source=mobile"), "China Mobile collection must start from the current production archive");
 assert(mobileCollector.includes("mobile API returned 403; switching to a same-origin Chromium session"), "China Mobile collection must fall back to a real browser after an API 403");
 assert(mobileCollector.includes("credentials: \"include\""), "China Mobile browser requests must preserve same-origin cookies");
 

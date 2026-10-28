@@ -58,6 +58,9 @@ assert.equal(options.operators.length, 4);
 assert.deepEqual(options.noticeCategories, ["招采公告", "采购需求", "预公告"]);
 assert(options.focusGroups.some((group) => group.categories.some((category) => category.name === "数据中心")));
 
+const unauthorizedArchiveResponse = await worker.fetch(new Request("https://local.test/api/notices/archive?source=mobile"), env);
+assert.equal(unauthorizedArchiveResponse.status, 401, "raw archive export must require GitHub OIDC authentication");
+
 const dataCenter = await search({
   provinces: ["福建"],
   operators: ["移动"],

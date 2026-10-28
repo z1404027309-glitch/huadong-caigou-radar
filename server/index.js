@@ -4,6 +4,7 @@ export default {
     if (url.pathname === "/api/notices") return getNotices(url, env);
     if (url.pathname === "/api/notices/search") return searchNotices(request, url, env);
     if (url.pathname === "/api/notices/search-options") return getNoticeSearchOptions(env);
+    if (url.pathname === "/api/notices/archive") return getNoticeArchive(request, url, env);
     if (url.pathname === "/api/refresh") return handleRefresh(request, env);
     if (url.pathname === "/api/refresh-needed") return getRefreshNeeded(env);
     if (url.pathname === "/api/refresh-finish") return finishRefresh(request, env);
@@ -231,6 +232,17 @@ const SUPPORTED_NOTICE_CATEGORIES = Object.keys(NOTICE_CATEGORY_GROUPS);
 const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const OIDC_AUDIENCE = "huadong-caigou-radar";
 const REFRESH_REPOSITORY = "z1404027309-glitch/huadong-caigou-radar";
+
+async function getNoticeArchive(request, url, env) {
+  const source = String(url.searchParams.get("source") || "").trim();
+  if (!ARCHIVE_SOURCES.includes(source)) return json({ error: "invalid_source" }, 400, "no-store");
+  const token = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  const claims = await verifyGithubOidcToken(token).catch(() => null);
+  if (!claims) return json({ error: "unauthorized" }, 401, "no-store");
+  const stored = await readStoredArchives(env);
+  if (!stored[source]) return json({ error: "archive_unavailable" }, 404, "no-store");
+  return json(stored[source], 200, "no-store");
+}
 
 async function getNotices(url, env) {
   const searchMode = url.searchParams.has("q") || url.searchParams.has("limit");
