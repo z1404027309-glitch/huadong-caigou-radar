@@ -338,18 +338,37 @@ async function postJsonInBrowser(url, body) {
 
 async function getMobilePage() {
   if (mobilePage && !mobilePage.isClosed()) return mobilePage;
-  mobileBrowser = await chromium.launch({ headless: true });
+  // China Mobile currently rejects the API when Chromium is running in the
+  // headless automation profile.  Run the installed Chrome build in a real
+  // Xvfb display instead; the workflow starts this script through xvfb-run.
+  mobileBrowser = await chromium.launch({
+    channel: "chrome",
+    headless: false,
+    args: [
+      "--disable-blink-features=AutomationControlled",
+      "--disable-dev-shm-usage",
+      "--no-sandbox"
+    ]
+  });
   const context = await mobileBrowser.newContext({
-    locale: "zh-CN",
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
+    locale: "zh-CN"
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
   });
   mobilePage = await context.newPage();
   mobilePage.setDefaultTimeout(120000);
   await mobilePage.goto("https://b2b.10086.cn/b2b/main/listVendorNotice.html?noticeType=2#/biddingProcurementBulletin", {
-    waitUntil: "domcontentloaded",
+    waitUntil: "networkidle",
     timeout: 120000
   });
-  await mobilePage.waitForTimeout(1500);
+  // Do not treat a successfully rendered shell as a usable browser session.
+  // The first notice row proves that the site's own API request passed its
+  // access checks and its session/cookies are ready for same-origin requests.
+  await mobilePage.getByText(/\d{4}-\d{2}-\d{2}/).first().waitFor({
+    state: "visible",
+    timeout: 120000
+  });
   return mobilePage;
 }
 
