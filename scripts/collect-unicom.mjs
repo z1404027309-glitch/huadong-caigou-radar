@@ -41,10 +41,15 @@ await cdp.send("Debugger.setSkipAllPauses", { skip: true });
 
 try {
   const entryResponse = await page.goto("https://www.chinaunicombidding.cn/bidInformation", {
-    waitUntil: "networkidle",
+    waitUntil: "domcontentloaded",
     timeout: 90_000
   });
   console.log(`entry status=${entryResponse?.status() ?? "none"} url=${redactUrl(page.url())} title=${JSON.stringify(await page.title())}`);
+  // The site may answer the document request with 412 while still bootstrapping
+  // its SPA and anti-bot session. On slower CI runners that bootstrap performs
+  // a second navigation, so calling evaluate immediately can lose its execution
+  // context. Wait for the page to settle; API calls below also retry navigation.
+  await waitForStablePage(page);
 
   const summaries = [];
   for (const province of PROVINCES) {
@@ -97,7 +102,7 @@ try {
 }
 
 async function fetchList(page, provinceCode, annoType) {
-  const first = await page.evaluate(async ({ provinceCode, annoType }) => {
+  const first = await evaluateWithNavigationRetry(page, async ({ provinceCode, annoType }) => {
     const response = await fetch("/api/v1/bizAnno/getAnnoList", {
       method: "POST",
       headers: { "Content-Type": "application/json;charset=UTF-8" },
@@ -121,7 +126,7 @@ async function fetchList(page, provinceCode, annoType) {
   const records = [...(firstPayload.data?.records || [])];
   const pages = Math.min(Number(firstPayload.data?.pages || 1), 10);
   for (let pageNo = 2; pageNo <= pages; pageNo++) {
-    const next = await page.evaluate(async ({ provinceCode, annoType, pageNo }) => {
+    const next = await evaluateWithNavigationRetry(page, async ({ provinceCode, annoType, pageNo }) => {
       const response = await fetch("/api/v1/bizAnno/getAnnoList", {
         method: "POST",
         headers: { "Content-Type": "application/json;charset=UTF-8" },
@@ -145,6 +150,27 @@ async function fetchList(page, provinceCode, annoType) {
     records.push(...(nextPayload.data?.records || []));
   }
   return records;
+}
+
+async function waitForStablePage(page) {
+  await page.waitForLoadState("domcontentloaded", { timeout: 30_000 }).catch(() => {});
+  await page.waitForFunction(() => document.readyState === "complete", null, { timeout: 30_000 }).catch(() => {});
+  await page.waitForTimeout(5_000);
+}
+
+async function evaluateWithNavigationRetry(page, evaluator, argument) {
+  let lastError;
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      return await page.evaluate(evaluator, argument);
+    } catch (error) {
+      lastError = error;
+      if (!/Execution context was destroyed|navigation|Target closed/i.test(String(error?.message || error))) throw error;
+      console.warn(`page navigation interrupted API call; retrying ${attempt}/4`);
+      await waitForStablePage(page);
+    }
+  }
+  throw lastError;
 }
 
 function parseListResponse(result, label) {

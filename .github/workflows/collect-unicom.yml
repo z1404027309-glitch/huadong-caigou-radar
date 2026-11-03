@@ -90,7 +90,9 @@ jobs:
             if (-not $ready) { throw "Edge remote debugging endpoint did not start" }
             $env:UNICOM_CDP_ENDPOINT = "http://127.0.0.1:9222"
             npm run collect:unicom
+            if ($LASTEXITCODE -ne 0) { throw "China Unicom collector exited with code $LASTEXITCODE" }
             node scripts/validate-publication-source.mjs unicom
+            if ($LASTEXITCODE -ne 0) { throw "China Unicom archive validation exited with code $LASTEXITCODE" }
           } finally {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
           }
