@@ -239,9 +239,13 @@ async function getNoticeArchive(request, url, env) {
   const token = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const claims = await verifyGithubOidcToken(token).catch(() => null);
   if (!claims) return json({ error: "unauthorized" }, 401, "no-store");
-  const stored = await readStoredArchives(env);
-  if (!stored[source]) return json({ error: "archive_unavailable" }, 404, "no-store");
-  return json(stored[source], 200, "no-store");
+  // Only reconstruct the archive requested by the collector. Rebuilding all
+  // four chunked archives here can exceed D1's per-request query/subrequest
+  // budget once the production history grows, which made this endpoint return
+  // HTTP 500 and caused every scheduled collection after that point to skip.
+  const archive = await readStoredArchive(env, source);
+  if (!archive) return json({ error: "archive_unavailable" }, 404, "no-store");
+  return json(archive, 200, "no-store");
 }
 
 async function getNotices(url, env) {
@@ -929,6 +933,25 @@ async function readStoredArchives(env) {
     } catch {}
   }
   return archives;
+}
+
+async function readStoredArchive(env, source) {
+  if (!env.DB || !ARCHIVE_SOURCES.includes(source)) return null;
+  await ensureArchiveSchema(env.DB);
+  const row = await env.DB.prepare("SELECT payload FROM notice_archives WHERE source = ?")
+    .bind(source).first();
+  if (!row) return null;
+  try {
+    const marker = archiveChunkMarker(row.payload);
+    if (!marker) return JSON.parse(row.payload);
+    const chunkResult = await env.DB.prepare(`SELECT payload FROM notice_archive_chunks
+      WHERE source = ? ORDER BY chunk_index`).bind(source).all();
+    const chunks = chunkResult.results || [];
+    if (chunks.length !== marker.chunks) return null;
+    return JSON.parse(chunks.map((chunk) => chunk.payload).join(""));
+  } catch {
+    return null;
+  }
 }
 
 function splitArchivePayload(payload) {
