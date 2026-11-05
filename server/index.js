@@ -239,13 +239,18 @@ async function getNoticeArchive(request, url, env) {
   const token = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const claims = await verifyGithubOidcToken(token).catch(() => null);
   if (!claims) return json({ error: "unauthorized" }, 401, "no-store");
-  // Only reconstruct the archive requested by the collector. Rebuilding all
-  // four chunked archives here can exceed D1's per-request query/subrequest
-  // budget once the production history grows, which made this endpoint return
-  // HTTP 500 and caused every scheduled collection after that point to skip.
-  const archive = await readStoredArchive(env, source);
-  if (!archive) return json({ error: "archive_unavailable" }, 404, "no-store");
-  return json(archive, 200, "no-store");
+  // Return the already serialized archive instead of parsing and serializing a
+  // multi-megabyte object again. The duplicate conversion exceeded the Worker
+  // execution budget as the Mobile archive grew and surfaced as HTTP 500.
+  const payload = await readStoredArchivePayload(env, source);
+  if (!payload) return json({ error: "archive_unavailable" }, 404, "no-store");
+  return new Response(payload, {
+    status: 200,
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store"
+    }
+  });
 }
 
 async function getNotices(url, env) {
@@ -839,11 +844,17 @@ async function syncNoticeArchive(request, env) {
     env.DB.prepare(`INSERT INTO notice_archive_staging (batch_id, source, fetched_at, payload, updated_at)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(batch_id, source) DO UPDATE SET
       fetched_at = excluded.fetched_at, payload = excluded.payload, updated_at = excluded.updated_at`)
-      .bind(batchId, source, fetchedAt, marker, updatedAt),
-    ...chunks.map((chunk, index) => env.DB.prepare(`INSERT INTO notice_archive_staging_chunks
-      (batch_id, source, chunk_index, payload) VALUES (?, ?, ?, ?)`)
-      .bind(batchId, source, index, chunk))
+      .bind(batchId, source, fetchedAt, marker, updatedAt)
   ]);
+  // D1 limits the amount of work accepted in a single batch. Insert archive
+  // chunks in bounded groups so growing production histories do not turn a
+  // previously valid publication into an HTTP 500.
+  const chunkStatements = chunks.map((chunk, index) => env.DB.prepare(`INSERT INTO notice_archive_staging_chunks
+    (batch_id, source, chunk_index, payload) VALUES (?, ?, ?, ?)`)
+    .bind(batchId, source, index, chunk));
+  for (let index = 0; index < chunkStatements.length; index += 20) {
+    await env.DB.batch(chunkStatements.slice(index, index + 20));
+  }
   return json({ success: true, status: "pending", batchId, source, fetchedAt, count: archive.notices.length }, 200, "no-store");
 }
 
@@ -952,6 +963,25 @@ async function readStoredArchive(env, source) {
   } catch {
     return null;
   }
+}
+
+async function readStoredArchivePayload(env, source) {
+  if (!env.DB || !ARCHIVE_SOURCES.includes(source)) return "";
+  await ensureArchiveSchema(env.DB);
+  const row = await env.DB.prepare("SELECT payload FROM notice_archives WHERE source = ?")
+    .bind(source).first();
+  if (!row) return "";
+  const marker = archiveChunkMarker(row.payload);
+  if (!marker) return String(row.payload || "");
+  const parts = [];
+  for (let index = 0; index < marker.chunks; index += 10) {
+    const result = await env.DB.prepare(`SELECT chunk_index, payload FROM notice_archive_chunks
+      WHERE source = ? AND chunk_index >= ? AND chunk_index < ? ORDER BY chunk_index`)
+      .bind(source, index, Math.min(marker.chunks, index + 10)).all();
+    parts.push(...(result.results || []));
+  }
+  if (parts.length !== marker.chunks) return "";
+  return parts.map((part) => part.payload).join("");
 }
 
 function splitArchivePayload(payload) {
