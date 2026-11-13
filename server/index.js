@@ -5,6 +5,7 @@ export default {
     if (url.pathname === "/api/notices/search") return searchNotices(request, url, env);
     if (url.pathname === "/api/notices/search-options") return getNoticeSearchOptions(env);
     if (url.pathname === "/api/notices/archive") return getNoticeArchive(request, url, env);
+    if (url.pathname === "/api/mobile-upstream") return proxyMobileUpstream(request);
     if (url.pathname === "/api/refresh") return handleRefresh(request, env);
     if (url.pathname === "/api/refresh-needed") return getRefreshNeeded(env);
     if (url.pathname === "/api/refresh-finish") return finishRefresh(request, env);
@@ -219,6 +220,7 @@ async function ensureFocusSchema(db) {
 }
 
 const DETAIL_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryDetail";
+const MOBILE_LIST_API = "https://b2b.10086.cn/api-b2b/api-sync-es/white_list_api/b2b/publish/queryList";
 const ARCHIVE_SOURCES = ["mobile", "unicom", "tower", "telecom"];
 const ARCHIVE_CHUNK_SIZE = 200000;
 const SUPPORTED_PROVINCES = ["浙江", "江西", "福建"];
@@ -232,6 +234,61 @@ const SUPPORTED_NOTICE_CATEGORIES = Object.keys(NOTICE_CATEGORY_GROUPS);
 const OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const OIDC_AUDIENCE = "huadong-caigou-radar";
 const REFRESH_REPOSITORY = "z1404027309-glitch/huadong-caigou-radar";
+
+async function proxyMobileUpstream(request) {
+  if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405, "no-store");
+  const token = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!await verifyGithubOidcToken(token).catch(() => null)) {
+    return json({ error: "unauthorized" }, 401, "no-store");
+  }
+
+  const input = await request.json().catch(() => null);
+  const kind = input?.kind;
+  const payload = input?.payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return json({ error: "invalid_payload" }, 400, "no-store");
+  }
+  const validCategory = [
+    ["PROCUREMENT", "PROCUREMENT"],
+    ["PROCUREMENT", "ONE_SOURCE_PROCUREMENT"],
+    ["PURCHASE_SERVICE", "PURCHASE_OPINION"]
+  ].some(([type, oneType]) => payload.publishType === type && payload.publishOneType === oneType);
+  if (!validCategory || payload.sfactApplColumn5 !== "PC") {
+    return json({ error: "invalid_category" }, 400, "no-store");
+  }
+  if (kind === "list") {
+    if (!Number.isInteger(payload.current) || payload.current < 1 || payload.current > 1000
+      || payload.size !== 100 || payload.name !== "" || payload.purchaseType !== ""
+      || payload.companyType !== "" || !Array.isArray(payload.publishOneTypes)
+      || payload.publishOneTypes.length !== 1 || payload.publishOneTypes[0] !== payload.publishOneType) {
+      return json({ error: "invalid_list_query" }, 400, "no-store");
+    }
+  } else if (kind === "detail") {
+    if (!/^\d{8,25}$/.test(String(payload.publishId || ""))
+      || !/^[a-f\d]{32}$/i.test(String(payload.publishUuid || ""))) {
+      return json({ error: "invalid_detail_query" }, 400, "no-store");
+    }
+  } else {
+    return json({ error: "invalid_kind" }, 400, "no-store");
+  }
+
+  try {
+    const upstream = await fetch(kind === "list" ? MOBILE_LIST_API : DETAIL_API, {
+      method: "POST",
+      headers: upstreamHeaders(),
+      body: JSON.stringify(payload)
+    });
+    if (!upstream.ok) {
+      return json({ error: "mobile_upstream_unavailable", upstreamStatus: upstream.status }, 502, "no-store");
+    }
+    return new Response(upstream.body, {
+      status: 200,
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }
+    });
+  } catch (error) {
+    return json({ error: "mobile_upstream_unavailable", message: String(error?.message || error) }, 502, "no-store");
+  }
+}
 
 async function getNoticeArchive(request, url, env) {
   const source = String(url.searchParams.get("source") || "").trim();

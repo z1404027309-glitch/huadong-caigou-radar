@@ -60,6 +60,12 @@ assert(options.focusGroups.some((group) => group.categories.some((category) => c
 
 const unauthorizedArchiveResponse = await worker.fetch(new Request("https://local.test/api/notices/archive?source=mobile"), env);
 assert.equal(unauthorizedArchiveResponse.status, 401, "raw archive export must require GitHub OIDC authentication");
+const unauthorizedMobileRelayResponse = await worker.fetch(new Request("https://local.test/api/mobile-upstream", {
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify({ kind: "list", payload: {} })
+}), env);
+assert.equal(unauthorizedMobileRelayResponse.status, 401, "mobile upstream relay must require GitHub OIDC authentication");
 
 const dataCenter = await search({
   provinces: ["福建"],

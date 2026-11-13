@@ -150,6 +150,7 @@ jobs:
         id: mobile
         continue-on-error: true
         env:
+          MOBILE_PROXY_URL: https://huadong-caigou-radar.pages.dev/api/mobile-upstream
           MOBILE_BACKFILL_PROVINCE: ${{ inputs.mobile_pilot == true && '福建' || '' }}
           MOBILE_BACKFILL_DAYS: ${{ inputs.mobile_pilot == true && '31' || '0' }}
           MOBILE_BACKFILL_TITLE: ${{ inputs.mobile_pilot == true && '询比' || '' }}
@@ -263,3 +264,19 @@ jobs:
             -H "Content-Type: application/json" \
             --data-binary @- \
             "https://huadong-caigou-radar.pages.dev/api/refresh-finish"
+      - name: Report incomplete source collection
+        if: always() && inputs.mobile_pilot != true && steps.prepare_batch.outcome == 'success'
+        env:
+          MOBILE_STATUS: ${{ steps.mobile.outcome }}
+          UNICOM_STATUS: ${{ needs.collect_unicom.outputs.status }}
+          TOWER_STATUS: ${{ steps.tower.outcome }}
+          TELECOM_STATUS: ${{ steps.telecom.outcome }}
+        run: |
+          for SOURCE in mobile unicom tower telecom; do
+            STATUS_VAR=$(echo "${SOURCE}_STATUS" | tr '[:lower:]' '[:upper:]')
+            STATUS=$(printenv "$STATUS_VAR")
+            if [ "$STATUS" != "success" ]; then
+              echo "::error::${SOURCE} collection ${STATUS}; its production archive was reused"
+              exit 1
+            fi
+          done

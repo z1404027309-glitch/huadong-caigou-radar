@@ -29,9 +29,13 @@ const CATEGORIES = [
 ];
 const legacyAgent = new https.Agent({ secureOptions: cryptoConstants.SSL_OP_LEGACY_SERVER_CONNECT });
 const REQUEST_RETRIES = Number(process.env.MOBILE_REQUEST_RETRIES || 6);
+const MOBILE_PROXY_URL = String(process.env.MOBILE_PROXY_URL || "").trim();
 const execFileAsync = promisify(execFile);
 let ocrAttempts = 0;
 let browserRequired = false;
+let proxyRequired = false;
+let proxyToken = "";
+let proxyTokenExpires = 0;
 let mobileBrowser;
 let mobilePage;
 
@@ -283,6 +287,7 @@ async function postJson(url, headers, body) {
 }
 
 function postJsonOnce(url, headers, body) {
+  if (proxyRequired) return postJsonViaProxy(url, body);
   if (browserRequired) return postJsonInBrowser(url, body);
   const data = JSON.stringify(body);
   return new Promise((resolve, reject) => {
@@ -297,6 +302,12 @@ function postJsonOnce(url, headers, body) {
       response.on("end", () => {
         const text = Buffer.concat(chunks).toString("utf8");
         if (response.statusCode === 403) {
+          if (MOBILE_PROXY_URL && process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
+            proxyRequired = true;
+            console.warn("mobile API returned 403; switching to the authenticated website relay");
+            postJsonViaProxy(url, body).then(resolve, reject);
+            return;
+          }
           browserRequired = true;
           console.warn("mobile API returned 403; switching to a same-origin Chromium session");
           postJsonInBrowser(url, body).then(resolve, reject);
@@ -310,6 +321,42 @@ function postJsonOnce(url, headers, body) {
     request.setTimeout(30000, () => request.destroy(new Error("mobile list timeout")));
     request.end(data);
   });
+}
+
+async function postJsonViaProxy(url, body) {
+  const kind = url === LIST_API ? "list" : url === DETAIL_API ? "detail" : "";
+  if (!kind) throw new Error("unsupported mobile relay request");
+  const token = await getProxyToken();
+  const response = await fetch(MOBILE_PROXY_URL, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ kind, payload: body })
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    throw new Error(`mobile relay ${response.status}${result.upstreamStatus ? ` (upstream ${result.upstreamStatus})` : ""}`);
+  }
+  return response.json();
+}
+
+async function getProxyToken() {
+  if (proxyToken && Date.now() < proxyTokenExpires - 30000) return proxyToken;
+  const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+  const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+  if (!requestUrl || !requestToken) throw new Error("GitHub OIDC identity is unavailable for mobile relay");
+  const url = new URL(requestUrl);
+  url.searchParams.set("audience", "huadong-caigou-radar");
+  const response = await fetch(url, { headers: { authorization: `bearer ${requestToken}` } });
+  if (!response.ok) throw new Error(`GitHub OIDC request ${response.status}`);
+  const result = await response.json();
+  proxyToken = String(result.value || "");
+  if (!proxyToken) throw new Error("GitHub OIDC returned no token");
+  const claims = JSON.parse(Buffer.from(proxyToken.split(".")[1], "base64url").toString("utf8"));
+  proxyTokenExpires = Number(claims.exp || 0) * 1000;
+  return proxyToken;
 }
 
 async function postJsonInBrowser(url, body) {
