@@ -141,10 +141,7 @@ jobs:
         env:
           OIDC_TOKEN: ${{ steps.archive_oidc.outputs.token }}
         run: |
-          curl --fail --silent --show-error --retry 3 --retry-all-errors --max-time 120 \
-            -H "Authorization: Bearer $OIDC_TOKEN" \
-            "https://huadong-caigou-radar.pages.dev/api/notices/archive?source=mobile" \
-            --output public/data/mobile-notices.json
+          node scripts/restore-mobile-archive.mjs
           node scripts/validate-publication-source.mjs mobile
       - name: Collect China Mobile
         id: mobile

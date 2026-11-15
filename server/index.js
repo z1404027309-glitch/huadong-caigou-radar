@@ -296,6 +296,31 @@ async function getNoticeArchive(request, url, env) {
   const token = String(request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
   const claims = await verifyGithubOidcToken(token).catch(() => null);
   if (!claims) return json({ error: "unauthorized" }, 401, "no-store");
+  if (url.searchParams.has("manifest") || url.searchParams.has("chunk")) {
+    if (!env.DB) return json({ error: "archive_database_unavailable" }, 503, "no-store");
+    await ensureArchiveSchema(env.DB);
+    const row = await env.DB.prepare("SELECT payload, fetched_at FROM notice_archives WHERE source = ?")
+      .bind(source).first();
+    if (!row) return json({ error: "archive_unavailable" }, 404, "no-store");
+    const marker = archiveChunkMarker(row.payload);
+    const chunks = marker?.chunks || 1;
+    if (url.searchParams.has("manifest")) {
+      return json({ source, chunks, fetchedAt: row.fetched_at }, 200, "no-store");
+    }
+    const rawIndex = url.searchParams.get("chunk");
+    const index = Number(rawIndex);
+    if (!/^\d+$/.test(rawIndex || "") || !Number.isSafeInteger(index) || index < 0 || index >= chunks) {
+      return json({ error: "invalid_chunk" }, 400, "no-store");
+    }
+    const part = marker
+      ? await env.DB.prepare("SELECT payload FROM notice_archive_chunks WHERE source = ? AND chunk_index = ?")
+        .bind(source, index).first()
+      : { payload: row.payload };
+    if (!part) return json({ error: "archive_chunk_unavailable", index }, 404, "no-store");
+    // JSON escaping preserves a surrogate pair even when the archive was split
+    // between its UTF-16 code units in two database chunks.
+    return json({ index, payload: part.payload }, 200, "no-store");
+  }
   // Return the already serialized archive instead of parsing and serializing a
   // multi-megabyte object again. The duplicate conversion exceeded the Worker
   // execution budget as the Mobile archive grew and surfaced as HTTP 500.
