@@ -19,6 +19,7 @@ const existing = await readArchive();
 const existingById = new Map(existing.notices.map((item) => [String(item.sourceId || item.id), item]));
 const collected = [];
 const summaries = [];
+const pendingDetails = [];
 
 for (const province of PROVINCES) {
  for (const noticeConfig of NOTICE_TYPES) {
@@ -53,18 +54,20 @@ for (let offset = 0; offset < summaries.length; offset += 8) {
         id: summary.docId,
         securityViewCode: summary.securityViewCode
       });
-      return toNotice(summary, detail.data || {}, region);
+      if (!detail.data || !Object.keys(detail.data).length) throw new Error("empty detail");
+      return toNotice(summary, detail.data, region);
     } catch (error) {
-      console.warn(`detail failed ${sourceId}: ${error.message}`);
-      return { ...summaryToBase(summary, region), fieldsReady: false };
+      console.warn(`detail pending ${sourceId}: ${error.message}; will retry on the next collection`);
+      pendingDetails.push(sourceId);
+      return cached?.fieldsReady ? cached : null;
     }
   }));
-  collected.push(...results);
+  collected.push(...results.filter(Boolean));
 }
 
 const cutoff = new Date(Date.now() - KEEP_DAYS * 86400000).toISOString().slice(0, 10);
 const notices = [...new Map([...existing.notices, ...collected]
-  .filter((item) => !item.date || item.date >= cutoff)
+  .filter((item) => item.fieldsReady === true && (!item.date || item.date >= cutoff))
   .map((item) => [String(item.id), sanitizeNotice(item)]))
   .values()]
   .sort((a, b) => `${b.date} ${b.createDate || ""}`.localeCompare(`${a.date} ${a.createDate || ""}`));
@@ -76,6 +79,7 @@ await fs.writeFile(OUTPUT, `${JSON.stringify({
   notices
 }, null, 2)}\n`, "utf8");
 console.log(`saved ${notices.length} notices to ${OUTPUT}`);
+if (pendingDetails.length) console.warn(`::warning::${pendingDetails.length} Telecom detail request(s) remain pending: ${pendingDetails.join(", ")}`);
 
 async function post(url, body) {
   const response = await fetch(url, {
