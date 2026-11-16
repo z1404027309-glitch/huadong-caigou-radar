@@ -70,32 +70,40 @@ jobs:
         run: |
           $edge = "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe"
           if (-not (Test-Path -LiteralPath $edge)) { throw "Microsoft Edge is unavailable" }
-          $profile = Join-Path $env:RUNNER_TEMP "unicom-edge-profile"
-          $process = Start-Process -FilePath $edge -WindowStyle Hidden -PassThru -ArgumentList @(
-            "--remote-debugging-port=9222",
-            "--user-data-dir=$profile",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "about:blank"
-          )
-          try {
-            $ready = $false
-            for ($attempt = 1; $attempt -le 30; $attempt++) {
-              try {
-                Invoke-RestMethod -Uri "http://127.0.0.1:9222/json/version" | Out-Null
-                $ready = $true
-                break
-              } catch { Start-Sleep -Seconds 1 }
+          $success = $false
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            $port = 9221 + $attempt
+            $profile = Join-Path $env:RUNNER_TEMP "unicom-edge-profile-$attempt"
+            $process = Start-Process -FilePath $edge -WindowStyle Hidden -PassThru -ArgumentList @(
+              "--remote-debugging-port=$port",
+              "--user-data-dir=$profile",
+              "--no-first-run",
+              "--no-default-browser-check",
+              "about:blank"
+            )
+            try {
+              $ready = $false
+              for ($check = 1; $check -le 30; $check++) {
+                try {
+                  Invoke-RestMethod -Uri "http://127.0.0.1:$port/json/version" | Out-Null
+                  $ready = $true
+                  break
+                } catch { Start-Sleep -Seconds 1 }
+              }
+              if (-not $ready) { throw "Edge remote debugging endpoint did not start" }
+              $env:UNICOM_CDP_ENDPOINT = "http://127.0.0.1:$port"
+              npm run collect:unicom
+              if ($LASTEXITCODE -eq 0) {
+                node scripts/validate-publication-source.mjs unicom
+                if ($LASTEXITCODE -eq 0) { $success = $true; break }
+              }
+              Write-Warning "China Unicom collection attempt $attempt/3 failed; restarting Edge with a fresh profile"
+            } finally {
+              Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
             }
-            if (-not $ready) { throw "Edge remote debugging endpoint did not start" }
-            $env:UNICOM_CDP_ENDPOINT = "http://127.0.0.1:9222"
-            npm run collect:unicom
-            if ($LASTEXITCODE -ne 0) { throw "China Unicom collector exited with code $LASTEXITCODE" }
-            node scripts/validate-publication-source.mjs unicom
-            if ($LASTEXITCODE -ne 0) { throw "China Unicom archive validation exited with code $LASTEXITCODE" }
-          } finally {
-            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds (5 * $attempt)
           }
+          if (-not $success) { throw "China Unicom collection failed after 3 fresh Edge sessions" }
       - name: Record China Unicom result
         id: result
         if: always()
@@ -238,7 +246,7 @@ jobs:
             STATUS_VAR=$(echo "${SOURCE}_STATUS" | tr '[:lower:]' '[:upper:]')
             STATUS=$(printenv "$STATUS_VAR")
             if [ "$STATUS" = "success" ]; then
-              curl --fail --silent --show-error \
+              curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 5 --max-time 60 \
                 -X POST \
                 -H "Authorization: Bearer $OIDC_TOKEN" \
                 -H "Content-Type: application/json" \
@@ -255,7 +263,7 @@ jobs:
             --arg tower "$TOWER_STATUS" \
             --arg telecom "$TELECOM_STATUS" \
             '{batchId:$batchId,mobile:$mobile,unicom:$unicom,tower:$tower,telecom:$telecom}' | \
-          curl --fail --silent --show-error \
+          curl --fail --silent --show-error --retry 3 --retry-all-errors --retry-delay 5 --max-time 60 \
             -X POST \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
