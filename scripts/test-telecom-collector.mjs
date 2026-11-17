@@ -20,6 +20,7 @@ const records = [
   { docId: "pending", docTitle: "Pending notice", docTypeCode: "e2no", createDate: cached.date },
   { docId: "cached", docTitle: "Previously recognized notice", docTypeCode: "e2no", createDate: cached.date }
 ];
+let listAttempts = 0;
 
 try {
   await fs.mkdir(path.dirname(output), { recursive: true });
@@ -28,6 +29,9 @@ try {
   globalThis.fetch = async (url, options) => {
     const body = JSON.parse(options.body);
     if (url.endsWith("/queryListNew")) {
+      if (body.provinceCode === "23" && body.type === "e2no" && ++listAttempts === 1) {
+        return new Response("Not found", { status: 404 });
+      }
       const list = body.provinceCode === "23" && body.type === "e2no" ? records : [];
       return new Response(JSON.stringify({ code: 200, data: { pageInfo: { list } } }), { status: 200 });
     }
@@ -42,6 +46,7 @@ try {
   assert.deepEqual(new Set(archive.notices.map((item) => item.sourceId)), new Set(["complete", "cached"]));
   assert(archive.notices.every((item) => item.fieldsReady === true));
   assert.equal(archive.notices.find((item) => item.sourceId === "cached")?.budget, "100万元");
+  assert.equal(listAttempts, 2);
   console.log("telecom pending details do not block completed notices");
 } finally {
   process.chdir(originalCwd);

@@ -82,21 +82,38 @@ console.log(`saved ${notices.length} notices to ${OUTPUT}`);
 if (pendingDetails.length) console.warn(`::warning::${pendingDetails.length} Telecom detail request(s) remain pending: ${pendingDetails.join(", ")}`);
 
 async function post(url, body) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      accept: "application/json, text/plain, */*",
-      "content-type": "application/json;charset=UTF-8",
-      origin: "https://caigou.chinatelecom.com.cn",
-      referer: "https://caigou.chinatelecom.com.cn/search",
-      "user-agent": "Mozilla/5.0"
-    },
-    body: JSON.stringify(body)
-  });
-  if (!response.ok) throw new Error(`${response.status}`);
-  const payload = await response.json();
-  if (payload.code !== 200) throw new Error(payload.msg || "request failed");
-  return payload;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          accept: "application/json, text/plain, */*",
+          "content-type": "application/json;charset=UTF-8",
+          origin: "https://caigou.chinatelecom.com.cn",
+          referer: "https://caigou.chinatelecom.com.cn/search",
+          "user-agent": "Mozilla/5.0"
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30000)
+      });
+      if (!response.ok) {
+        const error = new Error(`${response.status} ${new URL(url).pathname}`);
+        error.retryable = response.status === 404 || response.status === 429 || response.status >= 500;
+        throw error;
+      }
+      const payload = await response.json();
+      if (payload.code !== 200) {
+        const error = new Error(payload.msg || "request failed");
+        error.retryable = Number(payload.code) >= 500;
+        throw error;
+      }
+      return payload;
+    } catch (error) {
+      if (attempt === 5 || error.retryable === false) throw error;
+      console.warn(`Telecom request retry ${attempt}/5 ${new URL(url).pathname}: ${error.message}`);
+      await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+    }
+  }
 }
 
 function isProcurementNotice(item) {
