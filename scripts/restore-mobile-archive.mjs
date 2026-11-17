@@ -10,9 +10,9 @@ const output = path.resolve(process.env.MOBILE_OUTPUT || "public/data/mobile-not
 const token = String(process.env.OIDC_TOKEN || "");
 const publicOnly = process.env.MOBILE_RESTORE_MODE === "public";
 
-async function getJson(url) {
+async function getJson(url, { attempts = 4, retryDelayMs = 1000 } = {}) {
   let lastError;
-  for (let attempt = 1; attempt <= 4; attempt++) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       const { stdout } = await execFileAsync("curl", [
         "--fail", "--silent", "--show-error", "--max-time", "30",
@@ -23,7 +23,7 @@ async function getJson(url) {
       // execFile errors can include command arguments, including the token.
       const detail = String(error?.stderr || "").trim();
       lastError = new Error(`archive download failed${detail ? `: ${detail}` : ""}`);
-      if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, attempt * retryDelayMs));
     }
   }
   throw lastError;
@@ -58,7 +58,7 @@ try {
   const startDate = new Date(Date.now() - (Number(process.env.MOBILE_KEEP_DAYS || 365) + 1) * 86400000).toISOString().slice(0, 10);
   const endDate = new Date().toISOString().slice(0, 10);
   const url = `${siteUrl}/api/notices?startDate=${startDate}&endDate=${endDate}`;
-  const result = await getJson(url);
+  const result = await getJson(url, { attempts: 8, retryDelayMs: 5000 });
   if (!Array.isArray(result.notices) || result.errors?.length || !result.mobileFetchedAt) {
     throw new Error("published notices API did not return a complete Mobile archive");
   }
