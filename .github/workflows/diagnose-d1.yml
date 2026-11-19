@@ -1,0 +1,47 @@
+name: Diagnose production D1 usage
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read D1 metadata and daily usage
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node --input-type=module <<'NODE'
+          const account = process.env.CF_ACCOUNT_ID;
+          const token = process.env.CF_API_TOKEN;
+          const databaseId = 'd02b316f-ca63-4b1c-bc28-ceef7858b161';
+          if (!account || !token) throw new Error('Cloudflare credentials are unavailable');
+          const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+          const metadataResponse = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/d1/database/${databaseId}`, { headers });
+          const metadata = await metadataResponse.json();
+          console.log('D1 metadata', metadataResponse.status, JSON.stringify({
+            success: metadata.success,
+            errors: metadata.errors,
+            fileSize: metadata.result?.file_size,
+            numTables: metadata.result?.num_tables
+          }));
+          for (let daysAgo = 0; daysAgo <= 1; daysAgo++) {
+            const day = new Date(Date.now() - daysAgo * 86400000).toISOString().slice(0, 10);
+            const query = `{ viewer { accounts(filter: { accountTag: "${account}" }) { d1AnalyticsAdaptiveGroups(limit: 5000, filter: { datetime_geq: "${day}T00:00:00Z", datetime_leq: "${day}T23:59:59Z" }) { dimensions { databaseId } sum { readQueries writeQueries rowsRead rowsWritten } } } } }`;
+            const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+              method: 'POST', headers, body: JSON.stringify({ query })
+            });
+            const payload = await response.json();
+            const groups = payload.data?.viewer?.accounts?.[0]?.d1AnalyticsAdaptiveGroups || [];
+            const matching = groups.filter((group) => group.dimensions?.databaseId === databaseId);
+            const totals = matching.reduce((sum, group) => {
+              for (const key of ['readQueries', 'writeQueries', 'rowsRead', 'rowsWritten']) sum[key] += Number(group.sum?.[key] || 0);
+              return sum;
+            }, { readQueries: 0, writeQueries: 0, rowsRead: 0, rowsWritten: 0 });
+            console.log('D1 usage', day, response.status, JSON.stringify({ errors: payload.errors, groups: matching.length, totals }));
+          }
+          NODE
