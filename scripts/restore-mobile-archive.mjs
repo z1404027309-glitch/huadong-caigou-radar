@@ -15,14 +15,16 @@ async function getJson(url, { attempts = 4, retryDelayMs = 1000 } = {}) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
       const { stdout } = await execFileAsync("curl", [
-        "--fail", "--silent", "--show-error", "--max-time", "30",
+        "--fail-with-body", "--silent", "--show-error", "--max-time", "30",
         "-H", `Authorization: Bearer ${token}`, url
       ], { maxBuffer: 64 * 1024 * 1024 });
       return JSON.parse(stdout);
     } catch (error) {
       // execFile errors can include command arguments, including the token.
       const detail = String(error?.stderr || "").trim();
-      lastError = new Error(`archive download failed${detail ? `: ${detail}` : ""}`);
+      let reason = "";
+      try { reason = String(JSON.parse(String(error?.stdout || ""))?.reason || "").slice(0, 80); } catch {}
+      lastError = new Error(`archive download failed${detail ? `: ${detail}` : ""}${reason ? ` (${reason})` : ""}`);
       if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, attempt * retryDelayMs));
     }
   }

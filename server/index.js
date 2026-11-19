@@ -1,32 +1,41 @@
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (url.pathname === "/api/notices") return getNotices(url, env);
-    if (url.pathname === "/api/notices/search") return searchNotices(request, url, env);
-    if (url.pathname === "/api/notices/search-options") return getNoticeSearchOptions(env);
-    if (url.pathname === "/api/notices/archive") return getNoticeArchive(request, url, env);
-    if (url.pathname === "/api/mobile-upstream") return proxyMobileUpstream(request);
-    if (url.pathname === "/api/refresh") return handleRefresh(request, env);
-    if (url.pathname === "/api/refresh-needed") return getRefreshNeeded(env);
-    if (url.pathname === "/api/refresh-finish") return finishRefresh(request, env);
-    if (url.pathname === "/api/archive-sync") return syncNoticeArchive(request, env);
-    if (url.pathname === "/api/document") return getDocument(url);
-    if (url.pathname === "/api/focus-rules") return handleFocusRules(request, env);
-    if (url.pathname === "/api/scoring-settings") return handleScoringSettings(request, env);
-    if (url.pathname === "/") {
-      const homepage = await env.ASSETS.fetch(new Request(new URL("/__homepage.txt", url)));
-      const headers = new Headers(homepage.headers);
-      headers.set("content-type", "text/html; charset=utf-8");
-      return new Response(homepage.body, { status: homepage.status, headers });
+    try {
+      if (url.pathname === "/api/notices") return await getNotices(url, env);
+      if (url.pathname === "/api/notices/search") return await searchNotices(request, url, env);
+      if (url.pathname === "/api/notices/search-options") return await getNoticeSearchOptions(env);
+      if (url.pathname === "/api/notices/archive") return await getNoticeArchive(request, url, env);
+      if (url.pathname === "/api/mobile-upstream") return await proxyMobileUpstream(request);
+      if (url.pathname === "/api/refresh") return await handleRefresh(request, env);
+      if (url.pathname === "/api/refresh-needed") return await getRefreshNeeded(env);
+      if (url.pathname === "/api/refresh-finish") return await finishRefresh(request, env);
+      if (url.pathname === "/api/archive-sync") return await syncNoticeArchive(request, env);
+      if (url.pathname === "/api/document") return await getDocument(url);
+      if (url.pathname === "/api/focus-rules") return await handleFocusRules(request, env);
+      if (url.pathname === "/api/scoring-settings") return await handleScoringSettings(request, env);
+      if (url.pathname === "/") {
+        const homepage = await env.ASSETS.fetch(new Request(new URL("/__homepage.txt", url)));
+        const headers = new Headers(homepage.headers);
+        headers.set("content-type", "text/html; charset=utf-8");
+        return new Response(homepage.body, { status: homepage.status, headers });
+      }
+      if (url.pathname.includes("ort-wasm-simd-threaded.jsep") && url.pathname.endsWith(".wasm")) {
+        const asset = await env.ASSETS.fetch(request);
+        const headers = new Headers(asset.headers);
+        headers.set("content-encoding", "gzip");
+        headers.set("content-type", "application/wasm");
+        return new Response(asset.body, { status: asset.status, headers });
+      }
+      return await env.ASSETS.fetch(request);
+    } catch (error) {
+      console.error(`request failed ${url.pathname}:`, error);
+      const message = String(error?.message || error);
+      const reason = /daily limit|quota|10050|exceeded.*limit/i.test(message)
+        ? "database_quota"
+        : /D1|database|SQLITE/i.test(message) ? "database_error" : "runtime_error";
+      return json({ error: "service_unavailable", reason }, 503, "no-store");
     }
-    if (url.pathname.includes("ort-wasm-simd-threaded.jsep") && url.pathname.endsWith(".wasm")) {
-      const asset = await env.ASSETS.fetch(request);
-      const headers = new Headers(asset.headers);
-      headers.set("content-encoding", "gzip");
-      headers.set("content-type", "application/wasm");
-      return new Response(asset.body, { status: asset.status, headers });
-    }
-    return env.ASSETS.fetch(request);
   }
 };
 
